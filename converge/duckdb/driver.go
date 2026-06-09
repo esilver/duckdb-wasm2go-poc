@@ -152,6 +152,21 @@ var (
 )
 
 // Prepare implements driver.Conn.
+
+// guardEnginePanic converts a Go panic escaping the wasm engine (a transpiled-
+// engine fault or a corrupted-state dereference) into a plain error. Without it
+// the panic unwinds through database/sql's internals, which have no recover of
+// their own — the connection's in-flight bookkeeping never settles and a later
+// db.Close blocks forever on closemu (observed when a UDF argument decoded to
+// nil and the UDF body panicked). The module's state after such a panic is
+// undefined, so the connection should be treated as poisoned; an error makes
+// that visible instead of hanging the pool.
+func guardEnginePanic(errp *error) {
+	if r := recover(); r != nil {
+		*errp = fmt.Errorf("duckdb: engine panic: %v", r)
+	}
+}
+
 func (c *conn) Prepare(query string) (driver.Stmt, error) {
 	return c.PrepareContext(context.Background(), query)
 }
@@ -159,7 +174,8 @@ func (c *conn) Prepare(query string) (driver.Stmt, error) {
 // PrepareContext implements driver.ConnPrepareContext. It compiles query into a
 // duckdb_prepared_statement; on failure it surfaces duckdb_prepare_error (or the
 // last host exception) and still destroys the statement.
-func (c *conn) PrepareContext(_ context.Context, query string) (driver.Stmt, error) {
+func (c *conn) PrepareContext(_ context.Context, query string) (st driver.Stmt, err error) {
+	defer guardEnginePanic(&err)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.prepareLocked(query)
@@ -194,7 +210,8 @@ func (c *conn) prepareLocked(query string) (*stmt, error) {
 
 // ExecContext implements driver.ExecerContext by preparing, executing, and
 // destroying a one-shot statement.
-func (c *conn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+func (c *conn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (res driver.Result, err error) {
+	defer guardEnginePanic(&err)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	st, err := c.prepareLocked(query)
@@ -207,7 +224,8 @@ func (c *conn) ExecContext(ctx context.Context, query string, args []driver.Name
 
 // QueryContext implements driver.QueryerContext by preparing and executing a
 // one-shot statement; the returned Rows owns its statement and closes it on Close.
-func (c *conn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+func (c *conn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (rws driver.Rows, err error) {
+	defer guardEnginePanic(&err)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	st, err := c.prepareLocked(query)
@@ -351,7 +369,8 @@ func (s *stmt) Exec(args []driver.Value) (driver.Result, error) {
 }
 
 // ExecContext implements driver.StmtExecContext.
-func (s *stmt) ExecContext(_ context.Context, args []driver.NamedValue) (driver.Result, error) {
+func (s *stmt) ExecContext(_ context.Context, args []driver.NamedValue) (res driver.Result, err error) {
+	defer guardEnginePanic(&err)
 	s.c.mu.Lock()
 	defer s.c.mu.Unlock()
 	return s.execLocked(args)
@@ -363,7 +382,8 @@ func (s *stmt) Query(args []driver.Value) (driver.Rows, error) {
 }
 
 // QueryContext implements driver.StmtQueryContext.
-func (s *stmt) QueryContext(_ context.Context, args []driver.NamedValue) (driver.Rows, error) {
+func (s *stmt) QueryContext(_ context.Context, args []driver.NamedValue) (rws driver.Rows, err error) {
+	defer guardEnginePanic(&err)
 	s.c.mu.Lock()
 	defer s.c.mu.Unlock()
 	return s.queryLocked(args)

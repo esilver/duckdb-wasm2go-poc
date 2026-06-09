@@ -96,8 +96,9 @@ func (mod *module) registerAggregateBand(con int32, name string, opts AggregateO
 	}
 
 	// update: the ANY-typed band variant. Column count comes from the chunk (the
-	// one closure serves every arity overload), and each column's type/scale/
-	// internal-type/JSON-alias is resolved per chunk, mirroring registerScalarEx.
+	// one closure serves every arity overload), and each column's decode metadata
+	// is resolved per chunk via vecDecoder, mirroring registerScalarEx (runtime
+	// types, JSON-alias wrapping as JSONValue, LIST cells as []any).
 	updateFn := func(info, input, states int32) {
 		n := m.Xduckdb_data_chunk_get_size(input)
 		if n == 0 {
@@ -105,31 +106,9 @@ func (mod *module) registerAggregateBand(con int32, name string, opts AggregateO
 		}
 		nCols := int(m.Xduckdb_data_chunk_get_column_count(input))
 
-		dataPtrs := make([]int32, nCols)
-		validPtrs := make([]int32, nCols)
-		colTypes := make([]int32, nCols)
-		colScales := make([]int32, nCols)
-		colInternals := make([]int32, nCols)
-		colJSON := make([]bool, nCols)
+		decs := make([]*vecDecoder, nCols)
 		for c := 0; c < nCols; c++ {
-			vec := m.Xduckdb_data_chunk_get_vector(input, int64(c))
-			dataPtrs[c] = m.Xduckdb_vector_get_data(vec)
-			validPtrs[c] = m.Xduckdb_vector_get_validity(vec)
-			lt := m.Xduckdb_vector_get_column_type(vec)
-			colTypes[c] = m.Xduckdb_get_type_id(lt)
-			colInternals[c] = dtBigint
-			if colTypes[c] == dtDecimal {
-				colScales[c] = m.Xduckdb_decimal_scale(lt)
-				colInternals[c] = m.Xduckdb_decimal_internal_type(lt)
-			}
-			if colTypes[c] == dtVarchar {
-				// The JSON alias is the only way to spot a JSON column (VARCHAR-backed).
-				if ap := m.Xduckdb_logical_type_get_alias(lt); ap != 0 {
-					colJSON[c] = mod.goString(ap) == "JSON"
-					m.Xduckdb_free(ap)
-				}
-			}
-			destroyLogicalType(mod, lt)
+			decs[c] = mod.newVecDecoder(m.Xduckdb_data_chunk_get_vector(input, int64(c)))
 		}
 
 		// Resolve the target state(s) once. In single-state mode every row folds
@@ -144,21 +123,15 @@ func (mod *module) registerAggregateBand(con int32, name string, opts AggregateO
 			// (the googlesqlite bridge collects the slices for replay at finalize).
 			args := make([]any, nCols)
 			for c := 0; c < nCols; c++ {
-				v := mod.readCellT(colTypes[c], colScales[c], colInternals[c], dataPtrs[c], validPtrs[c], r)
-				switch {
-				case v == nil:
-				case colTypes[c] == dtDecimal:
-					// Band convention: DECIMAL -> float64 (readCellT's exact decimal
-					// string is the typed scalar path's lossless form; the aggregate
-					// bodies expect the cgo bridge's decimal_to_double behavior).
+				v := decs[c].cell(r)
+				// Band convention: DECIMAL -> float64 (readCellT's exact decimal
+				// string is the typed scalar path's lossless form; the aggregate
+				// bodies expect the cgo bridge's decimal_to_double behavior).
+				if decs[c].typeID == dtDecimal {
 					if s, ok := v.(string); ok {
 						if f, err := strconv.ParseFloat(s, 64); err == nil {
 							v = f
 						}
-					}
-				case colJSON[c]:
-					if s, ok := v.(string); ok {
-						v = JSONValue(s)
 					}
 				}
 				args[c] = v

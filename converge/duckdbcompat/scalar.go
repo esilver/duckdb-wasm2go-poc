@@ -95,7 +95,9 @@ func RegisterScalarUDF(con *sql.Conn, name string, f ScalarFunc) error {
 	}
 
 	// RowExecutor's signature (func([]driver.Value) (any, error)) is exactly
-	// RegisterScalarConn's fn parameter type — pass it through with no wrapper.
+	// RegisterScalarConn's fn parameter type. The only adaptation is JSON:
+	// JSONValue-wrapped cells (JSON-alias columns) are parsed to the native Go
+	// value duckdb-go would deliver (see json.go) before reaching the executor.
 	return convergeduckdb.RegisterScalarConn(
 		con,
 		name,
@@ -104,6 +106,6 @@ func RegisterScalarUDF(con *sql.Conn, name string, f ScalarFunc) error {
 		varargsTypeID,
 		cfg.SpecialNullHandling,
 		cfg.Volatile,
-		f.Executor().RowExecutor,
+		jsonAwareExecutor(f.Executor().RowExecutor),
 	)
 }

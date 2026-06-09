@@ -38,12 +38,15 @@ import (
 //     float64, string, []byte, bool, time.Time, or nil for SQL NULL).
 //   - Combine merges src into dst (dst += src); src is left untouched/usable after.
 //   - Finalize returns the aggregate's output value for state as a driver.Value kind
-//     encodable by writeCell into retTypeID (or nil for SQL NULL).
+//     encodable by writeCell into retTypeID (or nil for SQL NULL). A non-nil error
+//     aborts the query with that message (surfaced through DuckDB's aggregate error
+//     channel) — the googlesqlite bridge needs this because its replay-at-finalize
+//     model defers every per-row Step error to finalize time.
 type AggregateImpl interface {
 	NewState() any
 	Update(state any, args []any)
 	Combine(dst, src any)
-	Finalize(state any) any
+	Finalize(state any) (any, error)
 }
 
 // ---- handle table ------------------------------------------------------------
@@ -175,7 +178,11 @@ func (mod *module) RegisterAggregateUDF(con int32, name string, paramTypeIDs []i
 		for i := int64(0); i < count; i++ {
 			blob := mod.readPtr(source + int32(i*4))
 			h := mod.readI64(blob)
-			v := impl.Finalize(mod.aggState(h))
+			v, ferr := impl.Finalize(mod.aggState(h))
+			if ferr != nil {
+				m.Xduckdb_aggregate_function_set_error(info, mod.cstring(fmt.Sprintf("duckdb: aggregate %q finalize: %v", name, ferr)))
+				return
+			}
 			if err := mod.writeCell(retTypeID, result, out, offset+i, v); err != nil {
 				// A misdeclared retTypeID vs Finalize value surfaces through DuckDB's
 				// aggregate error channel (mirrors the cgo bridge's agg_set_error), which
@@ -264,10 +271,10 @@ func (SumInt64Agg) Combine(dst, src any) {
 	d.any = d.any || s.any
 }
 
-func (SumInt64Agg) Finalize(state any) any {
+func (SumInt64Agg) Finalize(state any) (any, error) {
 	s := state.(*sumState)
 	if !s.any {
-		return nil // empty/all-NULL group -> SQL NULL
+		return nil, nil // empty/all-NULL group -> SQL NULL
 	}
-	return s.sum
+	return s.sum, nil
 }

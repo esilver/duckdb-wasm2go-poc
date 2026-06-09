@@ -157,12 +157,12 @@ func (gsumAgg) Combine(dst, src any) {
 	d.any = d.any || s.any
 }
 
-func (gsumAgg) Finalize(state any) any {
+func (gsumAgg) Finalize(state any) (any, error) {
 	s := state.(*gsumState)
 	if !s.any {
-		return nil
+		return nil, nil
 	}
-	return s.sum
+	return s.sum, nil
 }
 
 // TestGenericAggregateUDF registers my_gsum(BIGINT)->BIGINT via RegisterAggregateUDF

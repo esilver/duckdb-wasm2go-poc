@@ -28,10 +28,12 @@ func (a modABI) Table() []any                { return *a.m.X__indirect_function_
 func (a modABI) CanCatch(catchType, excType, adjustedPtrSlot int32) int32 {
 	return a.m.X__cxa_can_catch(catchType, excType, adjustedPtrSlot)
 }
-func (a modABI) GetExceptionPtr(excHeader int32) int32 { return a.m.X__cxa_get_exception_ptr(excHeader) }
+func (a modABI) GetExceptionPtr(excHeader int32) int32 {
+	return a.m.X__cxa_get_exception_ptr(excHeader)
+}
 func (a modABI) DynamicCast(obj, srcType, dstType, offset int32) int32 { return 0 }
-func (a modABI) Malloc(n int32) int32                  { return a.m.Xmalloc(n) }
-func (a modABI) Free(ptr int32)                        { a.m.Xfree(ptr) }
+func (a modABI) Malloc(n int32) int32                                  { return a.m.Xmalloc(n) }
+func (a modABI) Free(ptr int32)                                        { a.m.Xfree(ptr) }
 func (a modABI) ReadU32(ptr int32) int32 {
 	mem := *a.m.Xmemory().Slice()
 	return int32(binary.LittleEndian.Uint32(mem[ptr:]))
@@ -154,10 +156,10 @@ func (mod *module) allocOut(n int32) int32 {
 
 func (mod *module) free(ptr int32) { mod.m.Xfree(ptr) }
 
-func (mod *module) readU32(ptr int32) uint32 { return binary.LittleEndian.Uint32(mod.mem()[ptr:]) }
-func (mod *module) readU64(ptr int32) uint64 { return binary.LittleEndian.Uint64(mod.mem()[ptr:]) }
-func (mod *module) readI64(ptr int32) int64  { return int64(mod.readU64(ptr)) }
-func (mod *module) readPtr(ptr int32) int32  { return int32(mod.readU32(ptr)) }
+func (mod *module) readU32(ptr int32) uint32  { return binary.LittleEndian.Uint32(mod.mem()[ptr:]) }
+func (mod *module) readU64(ptr int32) uint64  { return binary.LittleEndian.Uint64(mod.mem()[ptr:]) }
+func (mod *module) readI64(ptr int32) int64   { return int64(mod.readU64(ptr)) }
+func (mod *module) readPtr(ptr int32) int32   { return int32(mod.readU32(ptr)) }
 func (mod *module) readF64(ptr int32) float64 { return math.Float64frombits(mod.readU64(ptr)) }
 func (mod *module) readF32(ptr int32) float32 {
 	return math.Float32frombits(mod.readU32(ptr))

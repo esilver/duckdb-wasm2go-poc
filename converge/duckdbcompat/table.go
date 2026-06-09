@@ -85,7 +85,9 @@ func RegisterTableUDF(con *sql.Conn, name string, f RowTableFunction) error {
 	}
 
 	var b strings.Builder
-	b.WriteString("CREATE TABLE ")
+	// IF NOT EXISTS: the stub persists in file-backed databases, so reopening a
+	// DB created by an earlier process must not fail the boot-time registration.
+	b.WriteString("CREATE TABLE IF NOT EXISTS ")
 	b.WriteString(quoteIdent(name))
 	b.WriteString(" (")
 	for i, c := range cols {

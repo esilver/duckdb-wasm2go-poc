@@ -137,7 +137,7 @@ func main() {
 	b.WriteString("// invoke_<sig> trampolines for the Emscripten exception ABI. Each performs the\n")
 	b.WriteString("// wrapped indirect call at table[index] under Host.trampoline, so a thrown C++\n")
 	b.WriteString("// exception is converted to module.setThrew + a zero return.\n\n")
-	b.WriteString("package exhost\n\n")
+	b.WriteString("package exhost\n\nimport \"fmt\"\n\n")
 
 	var counts struct{ f32, f64, i32, i64, void int }
 	for _, sig := range suffixes {
@@ -179,7 +179,13 @@ func main() {
 			fmt.Fprintf(&b, "\tvar ret %s\n", ret)
 		}
 		b.WriteString("\th.trampoline(func() {\n")
-		fmt.Fprintf(&b, "\t\tf := h.table()[index].(%s)\n", fnType)
+		// Guard the table lookup: a nil slot would otherwise fail the type
+		// assertion with a bare interface-conversion panic that hides the index.
+		b.WriteString("\t\tfv := h.table()[index]\n")
+		b.WriteString("\t\tif fv == nil {\n")
+		b.WriteString("\t\t\tpanic(fmt.Sprintf(\"invoke: nil indirect-table slot %d (table len %d)\", index, len(h.table())))\n")
+		b.WriteString("\t\t}\n")
+		fmt.Fprintf(&b, "\t\tf := fv.(%s)\n", fnType)
 		if ret != "" {
 			fmt.Fprintf(&b, "\t\tret = f(%s)\n", strings.Join(callArgs, ", "))
 		} else {

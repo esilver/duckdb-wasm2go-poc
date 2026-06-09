@@ -12,7 +12,7 @@
 // Per invocation the callback reads the input data chunk's row count, decodes each
 // input column's cell for the current row into a Go value (via the shared codec's
 // readCell), calls fn, and encodes the result back into the output vector (via
-// writeCell). A returned error is surfaced to DuckDB via duckdb_function_set_error,
+// writeCell). A returned error is surfaced to DuckDB via duckdb_scalar_function_set_error,
 // which aborts the query with that message.
 package duckdb
 
@@ -118,11 +118,11 @@ func (mod *module) registerScalarEx(con int32, name string, paramTypeIDs []int32
 			res, err := fn(args)
 			if err != nil {
 				// Surface the error to DuckDB; it aborts the query with this message.
-				m.Xduckdb_function_set_error(info, mod.cstring(err.Error()))
+				m.Xduckdb_scalar_function_set_error(info, mod.cstring(err.Error()))
 				return
 			}
 			if werr := mod.writeCell(retTypeID, output, outData, r, res); werr != nil {
-				m.Xduckdb_function_set_error(info, mod.cstring(werr.Error()))
+				m.Xduckdb_scalar_function_set_error(info, mod.cstring(werr.Error()))
 				return
 			}
 		}

@@ -301,3 +301,59 @@ func (s *Shim) Xhost_mtime(fd int32) int64 {
 	}
 	return fi.ModTime().Unix()
 }
+
+// Xhost_mkdir creates path (with parents). 0 on success or -errno.
+func (s *Shim) Xhost_mkdir(pathPtr, pathLen int32) int32 {
+	path := s.hostString(pathPtr, pathLen)
+	if path == "" {
+		return -int32(syscall.EINVAL)
+	}
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return -errnoOf(err)
+	}
+	return 0
+}
+
+// Xhost_rmdir removes the directory tree at path (recursive — DuckDB's
+// RemoveDirectory is used on its temp dir, which may still hold spill files).
+// 0 on success or -errno.
+func (s *Shim) Xhost_rmdir(pathPtr, pathLen int32) int32 {
+	path := s.hostString(pathPtr, pathLen)
+	if path == "" {
+		return -int32(syscall.EINVAL)
+	}
+	if err := os.RemoveAll(path); err != nil {
+		return -errnoOf(err)
+	}
+	return 0
+}
+
+// Xhost_listdir writes path's entries into module memory at out as
+// newline-terminated names (directories suffixed '/'). Returns bytes written
+// or -errno (-ERANGE if the listing does not fit outcap).
+func (s *Shim) Xhost_listdir(pathPtr, pathLen, out, outcap int32) int32 {
+	path := s.hostString(pathPtr, pathLen)
+	if path == "" {
+		return -int32(syscall.EINVAL)
+	}
+	ents, err := os.ReadDir(path)
+	if err != nil {
+		return -errnoOf(err)
+	}
+	mem := s.memb()
+	n := int32(0)
+	for _, e := range ents {
+		name := e.Name()
+		if e.IsDir() {
+			name += "/"
+		}
+		need := int32(len(name)) + 1
+		if n+need > outcap || int(out+n+need) > len(mem) {
+			return -int32(syscall.ERANGE)
+		}
+		copy(mem[out+n:], name)
+		mem[out+n+int32(len(name))] = '\n'
+		n += need
+	}
+	return n
+}

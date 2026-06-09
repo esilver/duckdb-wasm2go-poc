@@ -176,11 +176,38 @@ const sizeofDuckdbResult = 256
 // registering the statically-linked core_functions extension first.
 // Returns the connection handle (duckdb_connection) and the db handle.
 func (mod *module) open(path string) (con int32, db int32, err error) {
+	// Install the Tier-2 host filesystem on a DBConfig BEFORE open (the database
+	// file is opened DURING duckdb_open_ext using config.file_system; a post-open
+	// hook is too late). Without this, the instance falls back to DuckDB's local
+	// FS, whose directory syscalls are ENOSYS under wasm — file-backed DBs can't
+	// persist and even :memory: DBs fail when the engine spills (the temp
+	// directory is created through the instance's filesystem).
+	cfgSlot := mod.allocOut(4)
+	if rc := mod.m.Xduckdb_create_config(cfgSlot); rc != 0 {
+		mod.free(cfgSlot)
+		return 0, 0, fmt.Errorf("duckdb_create_config: %s", orUnknown(mod.lastError()))
+	}
+	cfg := mod.readPtr(cfgSlot)
+	mod.m.Xhost_fs_attach_to_config(cfg)
+
 	pathPtr := mod.cstring(path)
 	dbSlot := mod.allocOut(4)
-	if rc := mod.m.Xduckdb_open(pathPtr, dbSlot); rc != 0 {
-		return 0, 0, fmt.Errorf("duckdb_open(%q): %s", path, orUnknown(mod.lastError()))
+	errSlot := mod.allocOut(4) // char** out-param for the open error string
+	rc := mod.m.Xduckdb_open_ext(pathPtr, dbSlot, cfg, errSlot)
+	mod.m.Xduckdb_destroy_config(cfgSlot) // open_ext moved file_system out; free the shell
+	mod.free(cfgSlot)
+	if rc != 0 {
+		msg := ""
+		if ep := mod.readPtr(errSlot); ep != 0 {
+			msg = mod.goString(ep)
+		}
+		if msg == "" {
+			msg = mod.lastError()
+		}
+		mod.free(errSlot)
+		return 0, 0, fmt.Errorf("duckdb_open_ext(%q): %s", path, orUnknown(msg))
 	}
+	mod.free(errSlot)
 	db = mod.readPtr(dbSlot)
 	mod.m.Xregister_core_functions(db) // core-only amalgamation: register sum/avg/strings
 

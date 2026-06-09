@@ -75,6 +75,10 @@ type rows struct {
 
 	names   []string
 	typeIDs []int32 // duckdb_type id per column
+	// colJSON[col] marks a VARCHAR-backed column whose logical type carries the
+	// "JSON" alias; its cells scan as the PARSED native Go value (duckdb-go
+	// semantics, see DecodeJSONNative) rather than the raw JSON text.
+	colJSON []bool
 	// decimalMeta[col] is set for DECIMAL columns: width/scale + the internal
 	// storage type id used to read the raw integer.
 	decimalMeta map[int]decimalInfo
@@ -101,6 +105,7 @@ func newRows(mod *module, resPtr int32) (driver.Rows, error) {
 		resPtr:      resPtr,
 		names:       make([]string, n),
 		typeIDs:     make([]int32, n),
+		colJSON:     make([]bool, n),
 		decimalMeta: map[int]decimalInfo{},
 	}
 	for col := 0; col < n; col++ {
@@ -118,6 +123,14 @@ func newRows(mod *module, resPtr int32) (driver.Rows, error) {
 				width:    uint8(mod.m.Xduckdb_decimal_width(lt)),
 				scale:    uint8(mod.m.Xduckdb_decimal_scale(lt)),
 				internal: mod.m.Xduckdb_decimal_internal_type(lt),
+			}
+		}
+		if tid == dtVarchar {
+			// The JSON alias is the only way to tell a JSON column apart from a
+			// plain VARCHAR (JSON is VARCHAR-backed).
+			if ap := mod.m.Xduckdb_logical_type_get_alias(lt); ap != 0 {
+				r.colJSON[col] = mod.goString(ap) == "JSON"
+				mod.m.Xduckdb_free(ap)
 			}
 		}
 		// Free the logical type handle (pointer-to-handle arg, like destroy_result).
@@ -269,6 +282,10 @@ func (r *rows) decode(col int, dataPtr int32, row int) driver.Value {
 
 	case dtVarchar, dtEnum:
 		s, _ := readStringT(mod, dataPtr+int32(row*16))
+		if r.colJSON[col] {
+			// JSON column: deliver the parsed native value (duckdb-go semantics).
+			return DecodeJSONNative(s)
+		}
 		return s
 	case dtBlob:
 		_, b := readStringT(mod, dataPtr+int32(row*16))
@@ -291,7 +308,7 @@ func (r *rows) decode(col int, dataPtr int32, row int) driver.Value {
 		return epoch.Add(time.Duration(mod.readI64(dataPtr+int32(row*8))) * time.Nanosecond)
 
 	case dtDecimal:
-		return decimalString(mod, r.decimalMeta[col], dataPtr, row)
+		return decimalValue(mod, r.decimalMeta[col], dataPtr, row)
 
 	case dtUuid:
 		// UUID is stored as a hugeint (16 bytes). Surface as its decimal-ish string
@@ -359,11 +376,11 @@ func hugeintValue(mod *module, dataPtr int32, row int, signed bool) driver.Value
 	return v.String()
 }
 
-// decimalString formats a DECIMAL cell as its exact textual value (safest for a
-// SQL driver: no float rounding). The backing integer is read per the logical
-// type's internal storage type, then a decimal point is inserted scale digits
-// from the right.
-func decimalString(mod *module, info decimalInfo, dataPtr int32, row int) driver.Value {
+// decimalValue reads a DECIMAL cell as an exact Decimal (unscaled big.Int +
+// width/scale) — the same carrier duckdb-go delivers, which the googlesqlite
+// row decoder type-switches on. The backing integer is read per the logical
+// type's internal storage type.
+func decimalValue(mod *module, info decimalInfo, dataPtr int32, row int) driver.Value {
 	var unscaled *big.Int
 	switch info.internal {
 	case dtSmallint:
@@ -382,7 +399,7 @@ func decimalString(mod *module, info decimalInfo, dataPtr int32, row int) driver
 	default:
 		return nil
 	}
-	return formatDecimal(unscaled, info.scale)
+	return Decimal{Width: info.width, Scale: info.scale, Value: unscaled}
 }
 
 // formatDecimal renders unscaled / 10^scale as an exact decimal string.

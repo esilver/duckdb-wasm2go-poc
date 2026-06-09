@@ -8,6 +8,19 @@ package exhost
 
 import "fmt"
 
+func (h *Host) Xinvoke_d(index int32) float64 {
+	var ret float64
+	h.trampoline(func() {
+		fv := h.table()[index]
+		if fv == nil {
+			panic(fmt.Sprintf("invoke: nil indirect-table slot %d (table len %d)", index, len(h.table())))
+		}
+		f := fv.(func() float64)
+		ret = f()
+	})
+	return ret
+}
+
 func (h *Host) Xinvoke_dd(index int32, a0 float64) float64 {
 	var ret float64
 	h.trampoline(func() {
@@ -47,6 +60,19 @@ func (h *Host) Xinvoke_di(index int32, a0 int32) float64 {
 	return ret
 }
 
+func (h *Host) Xinvoke_didd(index int32, a0 int32, a1 float64, a2 float64) float64 {
+	var ret float64
+	h.trampoline(func() {
+		fv := h.table()[index]
+		if fv == nil {
+			panic(fmt.Sprintf("invoke: nil indirect-table slot %d (table len %d)", index, len(h.table())))
+		}
+		f := fv.(func(int32, float64, float64) float64)
+		ret = f(a0, a1, a2)
+	})
+	return ret
+}
+
 func (h *Host) Xinvoke_dii(index int32, a0 int32, a1 int32) float64 {
 	var ret float64
 	h.trampoline(func() {
@@ -82,6 +108,19 @@ func (h *Host) Xinvoke_diiid(index int32, a0 int32, a1 int32, a2 int32, a3 float
 		}
 		f := fv.(func(int32, int32, int32, float64) float64)
 		ret = f(a0, a1, a2, a3)
+	})
+	return ret
+}
+
+func (h *Host) Xinvoke_diiidiiiid(index int32, a0 int32, a1 int32, a2 int32, a3 float64, a4 int32, a5 int32, a6 int32, a7 int32, a8 float64) float64 {
+	var ret float64
+	h.trampoline(func() {
+		fv := h.table()[index]
+		if fv == nil {
+			panic(fmt.Sprintf("invoke: nil indirect-table slot %d (table len %d)", index, len(h.table())))
+		}
+		f := fv.(func(int32, int32, int32, float64, int32, int32, int32, int32, float64) float64)
+		ret = f(a0, a1, a2, a3, a4, a5, a6, a7, a8)
 	})
 	return ret
 }
@@ -450,6 +489,19 @@ func (h *Host) Xinvoke_iid(index int32, a0 int32, a1 float64) int32 {
 	return ret
 }
 
+func (h *Host) Xinvoke_iidi(index int32, a0 int32, a1 float64, a2 int32) int32 {
+	var ret int32
+	h.trampoline(func() {
+		fv := h.table()[index]
+		if fv == nil {
+			panic(fmt.Sprintf("invoke: nil indirect-table slot %d (table len %d)", index, len(h.table())))
+		}
+		f := fv.(func(int32, float64, int32) int32)
+		ret = f(a0, a1, a2)
+	})
+	return ret
+}
+
 func (h *Host) Xinvoke_iidii(index int32, a0 int32, a1 float64, a2 int32, a3 int32) int32 {
 	var ret int32
 	h.trampoline(func() {
@@ -459,6 +511,32 @@ func (h *Host) Xinvoke_iidii(index int32, a0 int32, a1 float64, a2 int32, a3 int
 		}
 		f := fv.(func(int32, float64, int32, int32) int32)
 		ret = f(a0, a1, a2, a3)
+	})
+	return ret
+}
+
+func (h *Host) Xinvoke_iidiii(index int32, a0 int32, a1 float64, a2 int32, a3 int32, a4 int32) int32 {
+	var ret int32
+	h.trampoline(func() {
+		fv := h.table()[index]
+		if fv == nil {
+			panic(fmt.Sprintf("invoke: nil indirect-table slot %d (table len %d)", index, len(h.table())))
+		}
+		f := fv.(func(int32, float64, int32, int32, int32) int32)
+		ret = f(a0, a1, a2, a3, a4)
+	})
+	return ret
+}
+
+func (h *Host) Xinvoke_iidiiii(index int32, a0 int32, a1 float64, a2 int32, a3 int32, a4 int32, a5 int32) int32 {
+	var ret int32
+	h.trampoline(func() {
+		fv := h.table()[index]
+		if fv == nil {
+			panic(fmt.Sprintf("invoke: nil indirect-table slot %d (table len %d)", index, len(h.table())))
+		}
+		f := fv.(func(int32, float64, int32, int32, int32, int32) int32)
+		ret = f(a0, a1, a2, a3, a4, a5)
 	})
 	return ret
 }
@@ -515,6 +593,19 @@ func (h *Host) Xinvoke_iiid(index int32, a0 int32, a1 int32, a2 float64) int32 {
 	return ret
 }
 
+func (h *Host) Xinvoke_iiidiii(index int32, a0 int32, a1 int32, a2 float64, a3 int32, a4 int32, a5 int32) int32 {
+	var ret int32
+	h.trampoline(func() {
+		fv := h.table()[index]
+		if fv == nil {
+			panic(fmt.Sprintf("invoke: nil indirect-table slot %d (table len %d)", index, len(h.table())))
+		}
+		f := fv.(func(int32, int32, float64, int32, int32, int32) int32)
+		ret = f(a0, a1, a2, a3, a4, a5)
+	})
+	return ret
+}
+
 func (h *Host) Xinvoke_iiidj(index int32, a0 int32, a1 int32, a2 float64, a3 int64) int32 {
 	var ret int32
 	h.trampoline(func() {
@@ -541,6 +632,32 @@ func (h *Host) Xinvoke_iiii(index int32, a0 int32, a1 int32, a2 int32) int32 {
 	return ret
 }
 
+func (h *Host) Xinvoke_iiiiddiii(index int32, a0 int32, a1 int32, a2 int32, a3 float64, a4 float64, a5 int32, a6 int32, a7 int32) int32 {
+	var ret int32
+	h.trampoline(func() {
+		fv := h.table()[index]
+		if fv == nil {
+			panic(fmt.Sprintf("invoke: nil indirect-table slot %d (table len %d)", index, len(h.table())))
+		}
+		f := fv.(func(int32, int32, int32, float64, float64, int32, int32, int32) int32)
+		ret = f(a0, a1, a2, a3, a4, a5, a6, a7)
+	})
+	return ret
+}
+
+func (h *Host) Xinvoke_iiiidii(index int32, a0 int32, a1 int32, a2 int32, a3 float64, a4 int32, a5 int32) int32 {
+	var ret int32
+	h.trampoline(func() {
+		fv := h.table()[index]
+		if fv == nil {
+			panic(fmt.Sprintf("invoke: nil indirect-table slot %d (table len %d)", index, len(h.table())))
+		}
+		f := fv.(func(int32, int32, int32, float64, int32, int32) int32)
+		ret = f(a0, a1, a2, a3, a4, a5)
+	})
+	return ret
+}
+
 func (h *Host) Xinvoke_iiiii(index int32, a0 int32, a1 int32, a2 int32, a3 int32) int32 {
 	var ret int32
 	h.trampoline(func() {
@@ -550,6 +667,32 @@ func (h *Host) Xinvoke_iiiii(index int32, a0 int32, a1 int32, a2 int32, a3 int32
 		}
 		f := fv.(func(int32, int32, int32, int32) int32)
 		ret = f(a0, a1, a2, a3)
+	})
+	return ret
+}
+
+func (h *Host) Xinvoke_iiiiidi(index int32, a0 int32, a1 int32, a2 int32, a3 int32, a4 float64, a5 int32) int32 {
+	var ret int32
+	h.trampoline(func() {
+		fv := h.table()[index]
+		if fv == nil {
+			panic(fmt.Sprintf("invoke: nil indirect-table slot %d (table len %d)", index, len(h.table())))
+		}
+		f := fv.(func(int32, int32, int32, int32, float64, int32) int32)
+		ret = f(a0, a1, a2, a3, a4, a5)
+	})
+	return ret
+}
+
+func (h *Host) Xinvoke_iiiiidii(index int32, a0 int32, a1 int32, a2 int32, a3 int32, a4 float64, a5 int32, a6 int32) int32 {
+	var ret int32
+	h.trampoline(func() {
+		fv := h.table()[index]
+		if fv == nil {
+			panic(fmt.Sprintf("invoke: nil indirect-table slot %d (table len %d)", index, len(h.table())))
+		}
+		f := fv.(func(int32, int32, int32, int32, float64, int32, int32) int32)
+		ret = f(a0, a1, a2, a3, a4, a5, a6)
 	})
 	return ret
 }
@@ -2231,6 +2374,32 @@ func (h *Host) Xinvoke_jijjj(index int32, a0 int32, a1 int64, a2 int64, a3 int64
 	return ret
 }
 
+func (h *Host) Xinvoke_jijjjjjd(index int32, a0 int32, a1 int64, a2 int64, a3 int64, a4 int64, a5 int64, a6 float64) int64 {
+	var ret int64
+	h.trampoline(func() {
+		fv := h.table()[index]
+		if fv == nil {
+			panic(fmt.Sprintf("invoke: nil indirect-table slot %d (table len %d)", index, len(h.table())))
+		}
+		f := fv.(func(int32, int64, int64, int64, int64, int64, float64) int64)
+		ret = f(a0, a1, a2, a3, a4, a5, a6)
+	})
+	return ret
+}
+
+func (h *Host) Xinvoke_jijjjjjdi(index int32, a0 int32, a1 int64, a2 int64, a3 int64, a4 int64, a5 int64, a6 float64, a7 int32) int64 {
+	var ret int64
+	h.trampoline(func() {
+		fv := h.table()[index]
+		if fv == nil {
+			panic(fmt.Sprintf("invoke: nil indirect-table slot %d (table len %d)", index, len(h.table())))
+		}
+		f := fv.(func(int32, int64, int64, int64, int64, int64, float64, int32) int64)
+		ret = f(a0, a1, a2, a3, a4, a5, a6, a7)
+	})
+	return ret
+}
+
 func (h *Host) Xinvoke_jj(index int32, a0 int64) int64 {
 	var ret int64
 	h.trampoline(func() {
@@ -2403,6 +2572,17 @@ func (h *Host) Xinvoke_vidi(index int32, a0 int32, a1 float64, a2 int32) {
 	})
 }
 
+func (h *Host) Xinvoke_vidiiii(index int32, a0 int32, a1 float64, a2 int32, a3 int32, a4 int32, a5 int32) {
+	h.trampoline(func() {
+		fv := h.table()[index]
+		if fv == nil {
+			panic(fmt.Sprintf("invoke: nil indirect-table slot %d (table len %d)", index, len(h.table())))
+		}
+		f := fv.(func(int32, float64, int32, int32, int32, int32))
+		f(a0, a1, a2, a3, a4, a5)
+	})
+}
+
 func (h *Host) Xinvoke_vif(index int32, a0 int32, a1 float32) {
 	h.trampoline(func() {
 		fv := h.table()[index]
@@ -2521,6 +2701,17 @@ func (h *Host) Xinvoke_viiid(index int32, a0 int32, a1 int32, a2 int32, a3 float
 		}
 		f := fv.(func(int32, int32, int32, float64))
 		f(a0, a1, a2, a3)
+	})
+}
+
+func (h *Host) Xinvoke_viiidi(index int32, a0 int32, a1 int32, a2 int32, a3 float64, a4 int32) {
+	h.trampoline(func() {
+		fv := h.table()[index]
+		if fv == nil {
+			panic(fmt.Sprintf("invoke: nil indirect-table slot %d (table len %d)", index, len(h.table())))
+		}
+		f := fv.(func(int32, int32, int32, float64, int32))
+		f(a0, a1, a2, a3, a4)
 	})
 }
 

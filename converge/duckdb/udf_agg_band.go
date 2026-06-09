@@ -22,7 +22,6 @@ package duckdb
 
 import (
 	"fmt"
-	"strconv"
 )
 
 // dtAny is DUCKDB_TYPE_ANY — valid for PARAMETERS (binder matches any input
@@ -124,15 +123,11 @@ func (mod *module) registerAggregateBand(con int32, name string, opts AggregateO
 			args := make([]any, nCols)
 			for c := 0; c < nCols; c++ {
 				v := decs[c].cell(r)
-				// Band convention: DECIMAL -> float64 (readCellT's exact decimal
-				// string is the typed scalar path's lossless form; the aggregate
-				// bodies expect the cgo bridge's decimal_to_double behavior).
-				if decs[c].typeID == dtDecimal {
-					if s, ok := v.(string); ok {
-						if f, err := strconv.ParseFloat(s, 64); err == nil {
-							v = f
-						}
-					}
+				// Band convention: DECIMAL -> float64 (the aggregate bodies expect
+				// the cgo bridge's decimal_to_double behavior, not the exact
+				// Decimal carrier the scalar path delivers).
+				if d, ok := v.(Decimal); ok {
+					v = d.Float64()
 				}
 				args[c] = v
 			}

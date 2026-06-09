@@ -31,6 +31,7 @@ type vecDecoder struct {
 	dataPtr  int32
 	validPtr int32
 	typeID   int32
+	width    int32 // DECIMAL only
 	scale    int32 // DECIMAL only
 	internal int32 // DECIMAL backing integer type id
 	isJSON   bool  // VARCHAR with the JSON alias
@@ -50,6 +51,7 @@ func (mod *module) newVecDecoder(vec int32) *vecDecoder {
 	d.typeID = m.Xduckdb_get_type_id(lt)
 	switch d.typeID {
 	case dtDecimal:
+		d.width = m.Xduckdb_decimal_width(lt)
 		d.scale = m.Xduckdb_decimal_scale(lt)
 		d.internal = m.Xduckdb_decimal_internal_type(lt)
 	case dtVarchar:
@@ -79,6 +81,18 @@ func (d *vecDecoder) cell(row int64) any {
 			out[i] = d.child.cell(off + i)
 		}
 		return out
+	}
+	if d.typeID == dtDecimal {
+		// DECIMAL cells are delivered as the exact Decimal carrier (the same
+		// type duckdb-go hands UDFs; numeric literals like 2.0 bind as DECIMAL).
+		if !d.mod.readValid(d.validPtr, row) {
+			return nil
+		}
+		unscaled := d.mod.readDecimalUnscaled(d.internal, d.dataPtr, row)
+		if unscaled == nil {
+			return nil
+		}
+		return Decimal{Width: uint8(d.width), Scale: uint8(d.scale), Value: unscaled}
 	}
 	v := d.mod.readCellT(d.typeID, d.scale, d.internal, d.dataPtr, d.validPtr, row)
 	if d.isJSON {

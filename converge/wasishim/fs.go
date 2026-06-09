@@ -39,17 +39,17 @@ import (
 // ---- WASI errno (subset we map Go errors to) ------------------------------
 
 const (
-	wasiEACCES       = 2
-	wasiEEXIST       = 20
-	wasiEINVAL       = 28
-	wasiEIO          = 29
-	wasiEISDIR       = 31
-	wasiENOENT       = 44
-	wasiENOTDIR      = 54
-	wasiENOTEMPTY    = 55
-	wasiEOVERFLOW    = 61
-	wasiEPERM        = 63 // also used for "not permitted"
-	wasiENOTCAPABLE  = 76
+	wasiEACCES      = 2
+	wasiEEXIST      = 20
+	wasiEINVAL      = 28
+	wasiEIO         = 29
+	wasiEISDIR      = 31
+	wasiENOENT      = 44
+	wasiENOTDIR     = 54
+	wasiENOTEMPTY   = 55
+	wasiEOVERFLOW   = 61
+	wasiEPERM       = 63 // also used for "not permitted"
+	wasiENOTCAPABLE = 76
 )
 
 // ---- WASI filetype --------------------------------------------------------

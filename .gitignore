@@ -6,7 +6,7 @@ amalg/
 libduckdb-src.zip
 
 # Shallow upstream clone, used only to inspect scripts
-duckdb/
+/duckdb/
 
 # The 85.8 MB standalone wasm (rebuild with ./build.sh)
 duckdb_core.wasm
@@ -36,3 +36,11 @@ converge_c/duckdb_run_*
 duckdb-src/
 # Scratch second module dir used during build orchestration
 converge_c/
+
+# More regenerable artifacts (Tier2 host-FS + compiled demo/test binaries)
+converge/fsgenpkg/
+converge/duckdb_demo
+converge/duckdb_run_*
+converge/*.test
+converge/fstest/fstest
+converge/fstest/*.test

@@ -9,10 +9,15 @@
 #include "duckdb/main/capi/capi_internal.hpp"
 #include "core_functions_extension.hpp"
 #include "json_extension.hpp"
+#include "icu_extension.hpp"
 
 extern "C" void register_core_functions(duckdb_database db) {
 	auto *wrapper = reinterpret_cast<duckdb::DatabaseWrapper *>(db);
 	duckdb::DuckDB duck(*wrapper->database->instance);
 	duck.LoadStaticExtension<duckdb::CoreFunctionsExtension>();
 	duck.LoadStaticExtension<duckdb::JsonExtension>();
+	// icu: timezone-aware temporal functions (TIMESTAMPTZ casts, *_trunc/add/
+	// diff with zones, time bucketing). Mirrors the cgo libduckdb, which
+	// bundles icu — without it those binders try to autoload and fail.
+	duck.LoadStaticExtension<duckdb::IcuExtension>();
 }

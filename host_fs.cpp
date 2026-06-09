@@ -58,6 +58,15 @@ int32_t host_unlink(const char *path, int32_t pathlen);
 int32_t host_rename(const char *oldp, int32_t oldlen, const char *newp, int32_t newlen);
 // Directory existence: 1 = dir, 0 = not a dir, -errno on error.
 int32_t host_isdir(const char *path, int32_t pathlen);
+// Create a directory (with parents). 0 on success or -errno.
+int32_t host_mkdir(const char *path, int32_t pathlen);
+// Remove a directory tree (recursive; DuckDB's RemoveDirectory semantics).
+// 0 on success or -errno.
+int32_t host_rmdir(const char *path, int32_t pathlen);
+// List directory entries into out as newline-terminated names, with directory
+// names suffixed '/'. Returns bytes written (>=0) or -errno (-ERANGE if the
+// listing exceeds outcap).
+int32_t host_listdir(const char *path, int32_t pathlen, char *out, int32_t outcap);
 }
 
 // Open-flag bits we hand the host (decoupled from DuckDB's FileOpenFlags).
@@ -251,6 +260,45 @@ public:
 			throw IOException("HostFileSystem: rename \"{}\" -> \"{}\" failed (errno {})", source, target,
 			                  (int)-rc);
 		}
+	}
+
+	// ----- directories (DuckDB's temp-spill dir, EXPORT DATABASE, ...) ---------
+	void CreateDirectory(const string &directory, optional_ptr<FileOpener> opener) override {
+		int32_t rc = host_mkdir(directory.c_str(), (int32_t)directory.size());
+		if (rc < 0) {
+			throw IOException("HostFileSystem: mkdir \"{}\" failed (errno {})", directory, (int)-rc);
+		}
+	}
+	void RemoveDirectory(const string &directory, optional_ptr<FileOpener> opener) override {
+		int32_t rc = host_rmdir(directory.c_str(), (int32_t)directory.size());
+		if (rc < 0) {
+			throw IOException("HostFileSystem: rmdir \"{}\" failed (errno {})", directory, (int)-rc);
+		}
+	}
+	bool ListFiles(const string &directory, const std::function<void(const string &, bool)> &callback,
+	               FileOpener *opener) override {
+		std::vector<char> buf(1 << 20);
+		int32_t n = host_listdir(directory.c_str(), (int32_t)directory.size(), buf.data(), (int32_t)buf.size());
+		if (n < 0) {
+			return false;
+		}
+		size_t start = 0;
+		for (int32_t i = 0; i < n; i++) {
+			if (buf[i] != '\n') {
+				continue;
+			}
+			string name(buf.data() + start, (size_t)i - start);
+			start = (size_t)i + 1;
+			if (name.empty()) {
+				continue;
+			}
+			bool is_dir = name.back() == '/';
+			if (is_dir) {
+				name.pop_back();
+			}
+			callback(name, is_dir);
+		}
+		return true;
 	}
 
 	// ----- glob: no wildcard support; pass the literal path through if it exists.

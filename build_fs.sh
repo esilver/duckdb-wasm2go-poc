@@ -18,16 +18,26 @@ CF_SRCS=($(find "$DS/extension/core_functions" -name '*.cpp'))
 # yyjson dependency is already inside the amalgamation — do NOT compile
 # third_party/yyjson separately (duplicate symbols).
 JSON_SRCS=($(find "$DS/extension/json" -name '*.cpp'))
-echo "core_functions TUs: ${#CF_SRCS[@]} ; json TUs: ${#JSON_SRCS[@]} ; exported fns: $(echo $EXPORTS | tr ',' '\n' | wc -l)"
+# icu extension: timezone-aware TIMESTAMPTZ ops (timestamp_trunc/add/diff with
+# zones, current_date/time/datetime, time-bucketing). The cgo libduckdb bundles
+# it; without it DuckDB tries to AUTOLOAD "icu" at bind time and fails. The
+# vendored icu4c subset (common/i18n/stubdata) self-configures via its patched
+# uconfig.h, so no extra defines are needed — just the include dirs.
+ICU_SRCS=($(find "$DS/extension/icu" -name '*.cpp'))
+echo "core_functions TUs: ${#CF_SRCS[@]} ; json TUs: ${#JSON_SRCS[@]} ; icu TUs: ${#ICU_SRCS[@]} ; exported fns: $(echo $EXPORTS | tr ',' '\n' | wc -l)"
 
 emcc \
   "$HERE/amalg/duckdb.cpp" \
   "${CF_SRCS[@]}" \
   "${JSON_SRCS[@]}" \
+  "${ICU_SRCS[@]}" \
   "$HERE/register_core_functions.cpp" \
   "$HERE/host_fs.cpp" \
   -I"$DS/src/include" -I"$DS/extension/core_functions/include" \
   -I"$DS/extension/json/include" \
+  -I"$DS/extension/icu/include" \
+  -I"$DS/extension/icu/third_party/icu/common" \
+  -I"$DS/extension/icu/third_party/icu/i18n" \
   -I"$DS/third_party/skiplist" -I"$DS/third_party/pcg" -I"$DS/third_party/tdigest" \
   -I"$DS/third_party/jaro_winkler" -I"$DS/third_party/utf8proc/include" \
   -I"$DS/third_party/fmt/include" -I"$DS/third_party/re2" -I"$DS/third_party/fast_float" \

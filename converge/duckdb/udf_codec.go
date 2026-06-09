@@ -80,6 +80,28 @@ func (mod *module) writeU64(ptr int32, v uint64) {
 	mem[ptr+7] = byte(v >> 56)
 }
 
+// readDecimalUnscaled reads a DECIMAL cell's backing integer per the column's
+// internal storage type id. Returns nil for an unrecognized backing type.
+func (mod *module) readDecimalUnscaled(internalType, dataPtr int32, row int64) *big.Int {
+	switch internalType {
+	case dtSmallint:
+		return big.NewInt(int64(int16(mod.readU32(dataPtr + int32(row*2)))))
+	case dtInteger:
+		return big.NewInt(int64(int32(mod.readU32(dataPtr + int32(row*4)))))
+	case dtBigint:
+		return big.NewInt(mod.readI64(dataPtr + int32(row*8)))
+	case dtHugeint:
+		base := dataPtr + int32(row*16)
+		lower := mod.readU64(base)
+		upper := mod.readI64(base + 8)
+		unscaled := big.NewInt(upper)
+		unscaled.Lsh(unscaled, 64)
+		unscaled.Add(unscaled, new(big.Int).SetUint64(lower))
+		return unscaled
+	}
+	return nil
+}
+
 // ---- decode: input vector cell -> Go value -----------------------------------
 
 // readCell decodes ONE input-vector cell at row into a Go value, given the cell's
@@ -119,22 +141,8 @@ func (mod *module) readCellT(typeID, scale, internalType, dataPtr, validPtr int3
 	switch typeID {
 
 	case dtDecimal:
-		var unscaled *big.Int
-		switch internalType {
-		case dtSmallint:
-			unscaled = big.NewInt(int64(int16(mod.readU32(dataPtr + int32(row*2)))))
-		case dtInteger:
-			unscaled = big.NewInt(int64(int32(mod.readU32(dataPtr + int32(row*4)))))
-		case dtBigint:
-			unscaled = big.NewInt(mod.readI64(dataPtr + int32(row*8)))
-		case dtHugeint:
-			base := dataPtr + int32(row*16)
-			lower := mod.readU64(base)
-			upper := mod.readI64(base + 8)
-			unscaled = big.NewInt(upper)
-			unscaled.Lsh(unscaled, 64)
-			unscaled.Add(unscaled, new(big.Int).SetUint64(lower))
-		default:
+		unscaled := mod.readDecimalUnscaled(internalType, dataPtr, row)
+		if unscaled == nil {
 			return nil
 		}
 		return formatDecimal(unscaled, uint8(scale))

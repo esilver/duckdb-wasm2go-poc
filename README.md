@@ -4,10 +4,14 @@ Proof of concept for compiling DuckDB to a **standalone** WebAssembly module tha
 [`ncruces/wasm2go`](https://github.com/ncruces/wasm2go) can transpile into pure Go,
 so DuckDB can eventually run on a Go runtime with no CGo and no wazero.
 
-**Result: it works.** The full DuckDB v1.5.3 C-API amalgamation compiles to a
-standalone wasm in the required shape, wasm2go ingests it with zero unsupported
-opcodes, and the generated Go parses. See [Status](#status) for the boundary
-between "proven" and "remaining".
+**Result: it works - and it now RUNS.** The full DuckDB v1.5.3 C-API amalgamation
+compiles to a standalone wasm in the required shape, wasm2go ingests it with zero
+unsupported opcodes, the generated Go compiles, and **DuckDB executes real SQL in
+pure Go with `CGO_ENABLED=0`** - no cgo, no wasm runtime - including aggregates,
+`GROUP BY`/`ORDER BY`, string functions, and caught C++ exceptions. The runnable
+results, the four build walls and how each fell, the benchmark, and error-message
+handling are in **[RESULTS-runnable-poc.md](RESULTS-runnable-poc.md)**. This README
+documents the build/transpile/shape step; see [Status](#status) for what's proven.
 
 Built and verified 2026-06-08 on macOS arm64 (16 GB).
 
@@ -171,20 +175,30 @@ flag set first and shows the identical correct shape at 20 KB; its
 
 ## Status
 
-**Proven:** the wasm builds in the right shape, validates without exceptions, has
-no SIMD, exports the C API, and wasm2go ingests it into parseable Go.
+**Proven (build/transpile - this README):** the wasm builds in the right shape,
+validates without exceptions, has no SIMD, exports the C API, and wasm2go ingests
+it into parseable Go.
 
-**Remaining for a *runnable* PoC (out of scope for this build step):**
+**Proven (runnable - [RESULTS-runnable-poc.md](RESULTS-runnable-poc.md)):** the
+generated Go compiles and **DuckDB executes real SQL end-to-end in pure Go
+(`CGO_ENABLED=0`, no cgo, no wasm runtime)** - scalars, aggregates
+(`sum/min/max/avg/count`), `GROUP BY`/`ORDER BY`/`LIMIT`, string functions, and C++
+exception handling with full error-message text. All four items previously listed
+here as "remaining" are now resolved (details in RESULTS):
 
-1. **Memory wall.** The monolithic single-TU amalgamation needs ~7-8 GB at
-   compile time, and wasm2go needs ~8 GB - both tight on 16 GB. For optimized or
-   faster builds, split the amalgamation into unity chunks (DuckDB's own
-   `generate_unity_builds`) or build on a larger machine.
-2. **Host interfaces.** Implement `Xenv`/`Xwasi_snapshot_preview1`: the legacy-EH
-   ABI (reuse the Spike-T1 reference `host.go`: `invoke_*` trampolines that
-   recover a Go panic from `__cxa_throw`, `__cxa_find_matching_catch_*`,
-   `llvm_eh_typeid_for`, `__resumeException`) plus stubs for the 12 WASI + 21
-   `__syscall_*` + 3 net imports.
-3. **`go build` on the 490 MB Go.** It *parses*; compiling 18 M lines is its own
-   scaling exercise, separate from ingestibility, and was not attempted.
-4. **Execute a query** end to end through the generated Go - not yet done.
+1. **Memory/build wall** - building the wasm `-Oz` (33-39k *small* functions instead
+   of 197k) plus `split_new.py` (chunks wasm2go's giant `New()` table-init, which
+   overflowed the Go compiler's liveness bitmap) makes the 490 MB Go compile;
+   `-N -l` is scoped to `genpkg` because full Go `-O` OOMs on the package even at
+   64 GB.
+2. **Host interfaces** - the legacy-EH `Xenv` + WASI/syscall host is implemented
+   (`converge/exhost`, `converge/wasishim`).
+3. **`go build` on the generated Go** - compiles end to end (~7.5 min one-shot).
+4. **Execute a query** - done; aggregates, string functions, and caught exceptions
+   all run.
+
+**The one structural limit is performance.** No SIMD (wasm2go can't translate the
+`0xFD` opcode family, so the wasm is `-mno-simd128`) plus forced `-N -l` Go put this
+**~5-22x slower than native** (widest on SIMD-friendly scan/aggregate, narrower on
+join/hash/string-heavy work). This route delivers pure-Go DuckDB **semantics, not
+speed** - for real throughput, run native DuckDB out-of-process.

@@ -1,0 +1,7 @@
+# Regenerable artifacts (not committed): produced by build.sh/transpile.sh
+genpkg/
+*.wasm
+*_gen.go
+duckdb_poc
+*.test
+*.dat

@@ -13,14 +13,54 @@ package main
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	core "duckdbconverge/genpkg"
 
 	"duckdbconverge/exhost"
 	"duckdbconverge/wasishim"
 )
+
+// gHost lets the query helpers recover a failed query's message from the last C++
+// exception when duckdb_result_error returns null (DuckDB's convert-and-rethrow
+// loses it from the result). Set in main().
+var gHost *exhost.Host
+
+// resultError returns a failed query's error text: the C-API result error if
+// present, else the host's last-thrown exception message (DuckDB encodes errors
+// as JSON; we surface the human part).
+func resultError(m *core.Module, resPtr int32) string {
+	if p := m.Xduckdb_result_error(resPtr); p != 0 {
+		if s := goString(m, p); s != "" {
+			return s
+		}
+	}
+	if gHost != nil {
+		return extractMsg(gHost.LastThrowMessage())
+	}
+	return ""
+}
+
+// extractMsg pulls the readable message out of DuckDB's JSON error envelope
+// ({"exception_type":...,"exception_message":...}), falling back to the raw text.
+func extractMsg(raw string) string {
+	var e struct {
+		Type string `json:"exception_type"`
+		Msg  string `json:"exception_message"`
+	}
+	if json.Unmarshal([]byte(raw), &e) == nil && e.Msg != "" {
+		msg := strings.SplitN(e.Msg, "\n", 2)[0] // first line; DuckDB appends hints
+		if e.Type != "" {
+			return e.Type + " Error: " + msg
+		}
+		return msg
+	}
+	return raw
+}
 
 // ---- ABI adapters: the generated *core.Module -> exhost/wasishim interfaces --
 
@@ -161,6 +201,10 @@ func openConnect(m *core.Module) (dbHandle, error) {
 	}
 	db := readPtr(m, dbSlot)
 
+	// Statically register the core_functions extension (sum/avg/min/string fns):
+	// the amalgamation is core-only, so these must be registered before use.
+	m.Xregister_core_functions(db)
+
 	conSlot := allocOut(m, 4)
 	if rc := m.Xduckdb_connect(db, conSlot); rc != 0 {
 		return dbHandle{}, fmt.Errorf("duckdb_connect -> state=%d", rc)
@@ -183,8 +227,7 @@ func queryInt64(m *core.Module, h dbHandle, sql string) (int64, int64, int64, er
 	m.Xfree(sqlPtr)
 
 	if rc != 0 {
-		errPtr := m.Xduckdb_result_error(resPtr)
-		msg := goString(m, errPtr)
+		msg := resultError(m, resPtr)
 		m.Xduckdb_destroy_result(resPtr)
 		m.Xfree(resPtr)
 		return 0, 0, 0, fmt.Errorf("duckdb_query(%q) state=%d: %s", sql, rc, msg)
@@ -200,8 +243,64 @@ func queryInt64(m *core.Module, h dbHandle, sql string) (int64, int64, int64, er
 	return val, cols, rows, nil
 }
 
+// diagQuery runs one statement and dumps state, the error char* pointer, and the
+// first bytes at that pointer, to find why error strings come back empty / DDL fails.
+func diagQuery(m *core.Module, h dbHandle, sql string) {
+	sqlPtr := cstring(m, sql)
+	resPtr := allocOut(m, sizeofDuckdbResult)
+	rc := m.Xduckdb_query(h.con, sqlPtr, resPtr)
+	m.Xfree(sqlPtr)
+	if rc == 0 {
+		cols := m.Xduckdb_column_count(resPtr)
+		rows := m.Xduckdb_row_count(resPtr)
+		var val int64
+		if cols > 0 && rows > 0 {
+			val = m.Xduckdb_value_int64(resPtr, 0, 0)
+		}
+		fmt.Printf("DIAG ok    %-32s state=0 cols=%d rows=%d val=%d\n", sql, cols, rows, val)
+	} else {
+		errPtr := m.Xduckdb_result_error(resPtr)
+		mem := *m.Xmemory().Slice()
+		var raw string
+		if errPtr > 0 && int(errPtr) < len(mem) {
+			end := errPtr
+			for int(end) < len(mem) && mem[end] != 0 && end-errPtr < 120 {
+				end++
+			}
+			raw = string(mem[errPtr:end])
+		}
+		// also dump the result error type accessor if present
+		fmt.Printf("DIAG ERR   %-32s state=%d errPtr=%d msg=%q\n", sql, rc, errPtr, raw)
+	}
+	m.Xduckdb_destroy_result(resPtr)
+	m.Xfree(resPtr)
+}
+
+// queryStr runs sql and returns the (col0,row0) value as a string via
+// duckdb_value_varchar (a duckdb-allocated char* read out of module memory).
+func queryStr(m *core.Module, h dbHandle, sql string) (string, error) {
+	sqlPtr := cstring(m, sql)
+	resPtr := allocOut(m, sizeofDuckdbResult)
+	rc := m.Xduckdb_query(h.con, sqlPtr, resPtr)
+	m.Xfree(sqlPtr)
+	if rc != 0 {
+		msg := resultError(m, resPtr)
+		m.Xduckdb_destroy_result(resPtr)
+		m.Xfree(resPtr)
+		return "", fmt.Errorf("state=%d: %s", rc, msg)
+	}
+	ptr := m.Xduckdb_value_varchar(resPtr, 0, 0)
+	s := goString(m, ptr)
+	m.Xfree(ptr)
+	m.Xduckdb_destroy_result(resPtr)
+	m.Xfree(resPtr)
+	return s, nil
+}
+
 func main() {
+	exhost.DebugThrow = false
 	e := newEnv()
+	gHost = e.Host
 	m := core.New(e, e.Shim) // arg0 Xenv = combined env; arg1 Xwasi = the shim
 	m.X_initialize()         // run the wasm's ctors / start function
 
@@ -226,12 +325,43 @@ func main() {
 		fmt.Printf("%-44s -> value=%d (cols=%d rows=%d)\n", sql, val, cols, rows)
 	}
 
-	// A multi-statement aggregate to prove the engine, not just a constant fold.
-	const agg = "CREATE TABLE t(x INT); INSERT INTO t VALUES (7),(35); SELECT sum(x) FROM t"
-	if val, cols, rows, err := queryInt64(m, h, agg); err != nil {
-		fmt.Printf("AGG -> ERROR: %v\n", err)
-	} else {
-		fmt.Printf("%-44s -> value=%d (cols=%d rows=%d)\n", "SELECT sum(x) FROM t  [=42]", val, cols, rows)
+	// Breadth: build a table and exercise core_functions aggregates + scalars.
+	for _, ddl := range []string{
+		"CREATE TABLE s(g VARCHAR, x INTEGER)",
+		"INSERT INTO s VALUES ('a',7),('a',35),('b',10),('b',100)",
+	} {
+		if _, _, _, err := queryInt64(m, h, ddl); err != nil {
+			fmt.Printf("setup ERROR %q: %v\n", ddl, err)
+		}
+	}
+	fmt.Println("\n-- integer/aggregate results --")
+	for _, q := range []string{
+		"SELECT sum(x) FROM s",         // 152
+		"SELECT min(x) FROM s",         // 7
+		"SELECT max(x) FROM s",         // 100
+		"SELECT count(*) FROM s",       // 4
+		"SELECT cast(avg(x) AS BIGINT) FROM s",          // 38
+		"SELECT sum(x) FROM s GROUP BY g ORDER BY g LIMIT 1", // 42 (group 'a')
+		"SELECT length('hello world')", // 11
+	} {
+		if val, _, _, err := queryInt64(m, h, q); err != nil {
+			fmt.Printf("  %-52s -> ERROR: %v\n", q, err)
+		} else {
+			fmt.Printf("  %-52s -> %d\n", q, val)
+		}
+	}
+	fmt.Println("\n-- string/varchar results --")
+	for _, q := range []string{
+		"SELECT upper('duckdb')",                 // DUCKDB
+		"SELECT concat('pure', '-', 'go')",       // pure-go
+		"SELECT string_agg(g, ',') FROM (SELECT DISTINCT g FROM s ORDER BY g)", // a,b
+		"SELECT printf('%d rows', count(*)) FROM s",                            // 4 rows
+	} {
+		if s, err := queryStr(m, h, q); err != nil {
+			fmt.Printf("  %-52s -> ERROR: %v\n", q, err)
+		} else {
+			fmt.Printf("  %-52s -> %q\n", q, s)
+		}
 	}
 
 	// A deliberately bad query: must come back as a DuckDB error string via the
@@ -240,6 +370,29 @@ func main() {
 		fmt.Printf("bad query caught (not aborted): %v\n", err)
 	} else {
 		fmt.Println("bad query unexpectedly SUCCEEDED")
+	}
+
+	// ---- Benchmark: a vectorized scan + filter + aggregate over N rows. ----
+	const benchN = 5_000_000
+	bench := fmt.Sprintf(
+		"SELECT sum(i) FROM range(%d) t(i) WHERE (i %% 3) = 0", benchN)
+	fmt.Printf("\n-- benchmark: %s --\n", bench)
+	// warm once, then time the best of 3.
+	if _, _, _, err := queryInt64(m, h, bench); err != nil {
+		fmt.Printf("  bench ERROR: %v\n", err)
+	} else {
+		best := time.Duration(1<<62)
+		var got int64
+		for i := 0; i < 3; i++ {
+			t0 := time.Now()
+			v, _, _, _ := queryInt64(m, h, bench)
+			if d := time.Since(t0); d < best {
+				best = d
+			}
+			got = v
+		}
+		rate := float64(benchN) / best.Seconds() / 1e6
+		fmt.Printf("  result=%d  best=%v  (%.1f M rows/s scanned)\n", got, best.Round(time.Millisecond), rate)
 	}
 
 	// Report any residual I/O the in-memory path touched (should be empty).

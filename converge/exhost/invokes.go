@@ -6,20 +6,29 @@
 
 package exhost
 
-func (h *Host) Xinvoke_di(index int32, a0 int32) float64 {
+func (h *Host) Xinvoke_dd(index int32, a0 float64) float64 {
 	var ret float64
 	h.trampoline(func() {
-		f := h.table()[index].(func(int32) float64)
+		f := h.table()[index].(func(float64) float64)
 		ret = f(a0)
 	})
 	return ret
 }
 
-func (h *Host) Xinvoke_didd(index int32, a0 int32, a1 float64, a2 float64) float64 {
+func (h *Host) Xinvoke_ddd(index int32, a0 float64, a1 float64) float64 {
 	var ret float64
 	h.trampoline(func() {
-		f := h.table()[index].(func(int32, float64, float64) float64)
-		ret = f(a0, a1, a2)
+		f := h.table()[index].(func(float64, float64) float64)
+		ret = f(a0, a1)
+	})
+	return ret
+}
+
+func (h *Host) Xinvoke_di(index int32, a0 int32) float64 {
+	var ret float64
+	h.trampoline(func() {
+		f := h.table()[index].(func(int32) float64)
+		ret = f(a0)
 	})
 	return ret
 }
@@ -42,11 +51,38 @@ func (h *Host) Xinvoke_diii(index int32, a0 int32, a1 int32, a2 int32) float64 {
 	return ret
 }
 
+func (h *Host) Xinvoke_diiid(index int32, a0 int32, a1 int32, a2 int32, a3 float64) float64 {
+	var ret float64
+	h.trampoline(func() {
+		f := h.table()[index].(func(int32, int32, int32, float64) float64)
+		ret = f(a0, a1, a2, a3)
+	})
+	return ret
+}
+
 func (h *Host) Xinvoke_diiii(index int32, a0 int32, a1 int32, a2 int32, a3 int32) float64 {
 	var ret float64
 	h.trampoline(func() {
 		f := h.table()[index].(func(int32, int32, int32, int32) float64)
 		ret = f(a0, a1, a2, a3)
+	})
+	return ret
+}
+
+func (h *Host) Xinvoke_diiiij(index int32, a0 int32, a1 int32, a2 int32, a3 int32, a4 int64) float64 {
+	var ret float64
+	h.trampoline(func() {
+		f := h.table()[index].(func(int32, int32, int32, int32, int64) float64)
+		ret = f(a0, a1, a2, a3, a4)
+	})
+	return ret
+}
+
+func (h *Host) Xinvoke_diij(index int32, a0 int32, a1 int32, a2 int64) float64 {
+	var ret float64
+	h.trampoline(func() {
+		f := h.table()[index].(func(int32, int32, int64) float64)
+		ret = f(a0, a1, a2)
 	})
 	return ret
 }
@@ -69,6 +105,15 @@ func (h *Host) Xinvoke_dij(index int32, a0 int32, a1 int64) float64 {
 	return ret
 }
 
+func (h *Host) Xinvoke_diji(index int32, a0 int32, a1 int64, a2 int32) float64 {
+	var ret float64
+	h.trampoline(func() {
+		f := h.table()[index].(func(int32, int64, int32) float64)
+		ret = f(a0, a1, a2)
+	})
+	return ret
+}
+
 func (h *Host) Xinvoke_dijj(index int32, a0 int32, a1 int64, a2 int64) float64 {
 	var ret float64
 	h.trampoline(func() {
@@ -87,6 +132,33 @@ func (h *Host) Xinvoke_dijjj(index int32, a0 int32, a1 int64, a2 int64, a3 int64
 	return ret
 }
 
+func (h *Host) Xinvoke_dj(index int32, a0 int64) float64 {
+	var ret float64
+	h.trampoline(func() {
+		f := h.table()[index].(func(int64) float64)
+		ret = f(a0)
+	})
+	return ret
+}
+
+func (h *Host) Xinvoke_djij(index int32, a0 int64, a1 int32, a2 int64) float64 {
+	var ret float64
+	h.trampoline(func() {
+		f := h.table()[index].(func(int64, int32, int64) float64)
+		ret = f(a0, a1, a2)
+	})
+	return ret
+}
+
+func (h *Host) Xinvoke_ff(index int32, a0 float32) float32 {
+	var ret float32
+	h.trampoline(func() {
+		f := h.table()[index].(func(float32) float32)
+		ret = f(a0)
+	})
+	return ret
+}
+
 func (h *Host) Xinvoke_fi(index int32, a0 int32) float32 {
 	var ret float32
 	h.trampoline(func() {
@@ -96,20 +168,20 @@ func (h *Host) Xinvoke_fi(index int32, a0 int32) float32 {
 	return ret
 }
 
-func (h *Host) Xinvoke_fii(index int32, a0 int32, a1 int32) float32 {
-	var ret float32
-	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int32) float32)
-		ret = f(a0, a1)
-	})
-	return ret
-}
-
 func (h *Host) Xinvoke_fiii(index int32, a0 int32, a1 int32, a2 int32) float32 {
 	var ret float32
 	h.trampoline(func() {
 		f := h.table()[index].(func(int32, int32, int32) float32)
 		ret = f(a0, a1, a2)
+	})
+	return ret
+}
+
+func (h *Host) Xinvoke_fiiiij(index int32, a0 int32, a1 int32, a2 int32, a3 int32, a4 int64) float32 {
+	var ret float32
+	h.trampoline(func() {
+		f := h.table()[index].(func(int32, int32, int32, int32, int64) float32)
+		ret = f(a0, a1, a2, a3, a4)
 	})
 	return ret
 }
@@ -132,6 +204,15 @@ func (h *Host) Xinvoke_fij(index int32, a0 int32, a1 int64) float32 {
 	return ret
 }
 
+func (h *Host) Xinvoke_fiji(index int32, a0 int32, a1 int64, a2 int32) float32 {
+	var ret float32
+	h.trampoline(func() {
+		f := h.table()[index].(func(int32, int64, int32) float32)
+		ret = f(a0, a1, a2)
+	})
+	return ret
+}
+
 func (h *Host) Xinvoke_fijj(index int32, a0 int32, a1 int64, a2 int64) float32 {
 	var ret float32
 	h.trampoline(func() {
@@ -146,15 +227,6 @@ func (h *Host) Xinvoke_i(index int32) int32 {
 	h.trampoline(func() {
 		f := h.table()[index].(func() int32)
 		ret = f()
-	})
-	return ret
-}
-
-func (h *Host) Xinvoke_id(index int32, a0 float64) int32 {
-	var ret int32
-	h.trampoline(func() {
-		f := h.table()[index].(func(float64) int32)
-		ret = f(a0)
 	})
 	return ret
 }
@@ -249,6 +321,15 @@ func (h *Host) Xinvoke_iidj(index int32, a0 int32, a1 float64, a2 int64) int32 {
 	return ret
 }
 
+func (h *Host) Xinvoke_iif(index int32, a0 int32, a1 float32) int32 {
+	var ret int32
+	h.trampoline(func() {
+		f := h.table()[index].(func(int32, float32) int32)
+		ret = f(a0, a1)
+	})
+	return ret
+}
+
 func (h *Host) Xinvoke_iii(index int32, a0 int32, a1 int32) int32 {
 	var ret int32
 	h.trampoline(func() {
@@ -258,19 +339,19 @@ func (h *Host) Xinvoke_iii(index int32, a0 int32, a1 int32) int32 {
 	return ret
 }
 
-func (h *Host) Xinvoke_iiidj(index int32, a0 int32, a1 int32, a2 float64, a3 int64) int32 {
+func (h *Host) Xinvoke_iiid(index int32, a0 int32, a1 int32, a2 float64) int32 {
 	var ret int32
 	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int32, float64, int64) int32)
-		ret = f(a0, a1, a2, a3)
+		f := h.table()[index].(func(int32, int32, float64) int32)
+		ret = f(a0, a1, a2)
 	})
 	return ret
 }
 
-func (h *Host) Xinvoke_iiifj(index int32, a0 int32, a1 int32, a2 float32, a3 int64) int32 {
+func (h *Host) Xinvoke_iiidj(index int32, a0 int32, a1 int32, a2 float64, a3 int64) int32 {
 	var ret int32
 	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int32, float32, int64) int32)
+		f := h.table()[index].(func(int32, int32, float64, int64) int32)
 		ret = f(a0, a1, a2, a3)
 	})
 	return ret
@@ -299,15 +380,6 @@ func (h *Host) Xinvoke_iiiiii(index int32, a0 int32, a1 int32, a2 int32, a3 int3
 	h.trampoline(func() {
 		f := h.table()[index].(func(int32, int32, int32, int32, int32) int32)
 		ret = f(a0, a1, a2, a3, a4)
-	})
-	return ret
-}
-
-func (h *Host) Xinvoke_iiiiiid(index int32, a0 int32, a1 int32, a2 int32, a3 int32, a4 int32, a5 float64) int32 {
-	var ret int32
-	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int32, int32, int32, int32, float64) int32)
-		ret = f(a0, a1, a2, a3, a4, a5)
 	})
 	return ret
 }
@@ -546,28 +618,10 @@ func (h *Host) Xinvoke_iiiiiiiji(index int32, a0 int32, a1 int32, a2 int32, a3 i
 	return ret
 }
 
-func (h *Host) Xinvoke_iiiiiiijii(index int32, a0 int32, a1 int32, a2 int32, a3 int32, a4 int32, a5 int32, a6 int64, a7 int32, a8 int32) int32 {
-	var ret int32
-	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int32, int32, int32, int32, int32, int64, int32, int32) int32)
-		ret = f(a0, a1, a2, a3, a4, a5, a6, a7, a8)
-	})
-	return ret
-}
-
 func (h *Host) Xinvoke_iiiiiiijji(index int32, a0 int32, a1 int32, a2 int32, a3 int32, a4 int32, a5 int32, a6 int64, a7 int64, a8 int32) int32 {
 	var ret int32
 	h.trampoline(func() {
 		f := h.table()[index].(func(int32, int32, int32, int32, int32, int32, int64, int64, int32) int32)
-		ret = f(a0, a1, a2, a3, a4, a5, a6, a7, a8)
-	})
-	return ret
-}
-
-func (h *Host) Xinvoke_iiiiiiijjj(index int32, a0 int32, a1 int32, a2 int32, a3 int32, a4 int32, a5 int32, a6 int64, a7 int64, a8 int64) int32 {
-	var ret int32
-	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int32, int32, int32, int32, int32, int64, int64, int64) int32)
 		ret = f(a0, a1, a2, a3, a4, a5, a6, a7, a8)
 	})
 	return ret
@@ -587,6 +641,15 @@ func (h *Host) Xinvoke_iiiiiiji(index int32, a0 int32, a1 int32, a2 int32, a3 in
 	h.trampoline(func() {
 		f := h.table()[index].(func(int32, int32, int32, int32, int32, int64, int32) int32)
 		ret = f(a0, a1, a2, a3, a4, a5, a6)
+	})
+	return ret
+}
+
+func (h *Host) Xinvoke_iiiiiijii(index int32, a0 int32, a1 int32, a2 int32, a3 int32, a4 int32, a5 int64, a6 int32, a7 int32) int32 {
+	var ret int32
+	h.trampoline(func() {
+		f := h.table()[index].(func(int32, int32, int32, int32, int32, int64, int32, int32) int32)
+		ret = f(a0, a1, a2, a3, a4, a5, a6, a7)
 	})
 	return ret
 }
@@ -699,15 +762,6 @@ func (h *Host) Xinvoke_iiiiijjii(index int32, a0 int32, a1 int32, a2 int32, a3 i
 	return ret
 }
 
-func (h *Host) Xinvoke_iiiiijjij(index int32, a0 int32, a1 int32, a2 int32, a3 int32, a4 int64, a5 int64, a6 int32, a7 int64) int32 {
-	var ret int32
-	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int32, int32, int32, int64, int64, int32, int64) int32)
-		ret = f(a0, a1, a2, a3, a4, a5, a6, a7)
-	})
-	return ret
-}
-
 func (h *Host) Xinvoke_iiiiijjj(index int32, a0 int32, a1 int32, a2 int32, a3 int32, a4 int64, a5 int64, a6 int64) int32 {
 	var ret int32
 	h.trampoline(func() {
@@ -758,15 +812,6 @@ func (h *Host) Xinvoke_iiiijiiii(index int32, a0 int32, a1 int32, a2 int32, a3 i
 	h.trampoline(func() {
 		f := h.table()[index].(func(int32, int32, int32, int64, int32, int32, int32, int32) int32)
 		ret = f(a0, a1, a2, a3, a4, a5, a6, a7)
-	})
-	return ret
-}
-
-func (h *Host) Xinvoke_iiiijiiiii(index int32, a0 int32, a1 int32, a2 int32, a3 int64, a4 int32, a5 int32, a6 int32, a7 int32, a8 int32) int32 {
-	var ret int32
-	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int32, int32, int64, int32, int32, int32, int32, int32) int32)
-		ret = f(a0, a1, a2, a3, a4, a5, a6, a7, a8)
 	})
 	return ret
 }
@@ -857,24 +902,6 @@ func (h *Host) Xinvoke_iiij(index int32, a0 int32, a1 int32, a2 int64) int32 {
 	h.trampoline(func() {
 		f := h.table()[index].(func(int32, int32, int64) int32)
 		ret = f(a0, a1, a2)
-	})
-	return ret
-}
-
-func (h *Host) Xinvoke_iiijdi(index int32, a0 int32, a1 int32, a2 int64, a3 float64, a4 int32) int32 {
-	var ret int32
-	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int32, int64, float64, int32) int32)
-		ret = f(a0, a1, a2, a3, a4)
-	})
-	return ret
-}
-
-func (h *Host) Xinvoke_iiijf(index int32, a0 int32, a1 int32, a2 int64, a3 float32) int32 {
-	var ret int32
-	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int32, int64, float32) int32)
-		ret = f(a0, a1, a2, a3)
 	})
 	return ret
 }
@@ -987,15 +1014,6 @@ func (h *Host) Xinvoke_iij(index int32, a0 int32, a1 int64) int32 {
 	return ret
 }
 
-func (h *Host) Xinvoke_iijf(index int32, a0 int32, a1 int64, a2 float32) int32 {
-	var ret int32
-	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int64, float32) int32)
-		ret = f(a0, a1, a2)
-	})
-	return ret
-}
-
 func (h *Host) Xinvoke_iiji(index int32, a0 int32, a1 int64, a2 int32) int32 {
 	var ret int32
 	h.trampoline(func() {
@@ -1059,11 +1077,11 @@ func (h *Host) Xinvoke_iijiiiiiij(index int32, a0 int32, a1 int64, a2 int32, a3 
 	return ret
 }
 
-func (h *Host) Xinvoke_iijij(index int32, a0 int32, a1 int64, a2 int32, a3 int64) int32 {
+func (h *Host) Xinvoke_iijiji(index int32, a0 int32, a1 int64, a2 int32, a3 int64, a4 int32) int32 {
 	var ret int32
 	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int64, int32, int64) int32)
-		ret = f(a0, a1, a2, a3)
+		f := h.table()[index].(func(int32, int64, int32, int64, int32) int32)
+		ret = f(a0, a1, a2, a3, a4)
 	})
 	return ret
 }
@@ -1077,29 +1095,11 @@ func (h *Host) Xinvoke_iijj(index int32, a0 int32, a1 int64, a2 int64) int32 {
 	return ret
 }
 
-func (h *Host) Xinvoke_iijji(index int32, a0 int32, a1 int64, a2 int64, a3 int32) int32 {
-	var ret int32
-	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int64, int64, int32) int32)
-		ret = f(a0, a1, a2, a3)
-	})
-	return ret
-}
-
 func (h *Host) Xinvoke_iijjii(index int32, a0 int32, a1 int64, a2 int64, a3 int32, a4 int32) int32 {
 	var ret int32
 	h.trampoline(func() {
 		f := h.table()[index].(func(int32, int64, int64, int32, int32) int32)
 		ret = f(a0, a1, a2, a3, a4)
-	})
-	return ret
-}
-
-func (h *Host) Xinvoke_iijjiii(index int32, a0 int32, a1 int64, a2 int64, a3 int32, a4 int32, a5 int32) int32 {
-	var ret int32
-	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int64, int64, int32, int32, int32) int32)
-		ret = f(a0, a1, a2, a3, a4, a5)
 	})
 	return ret
 }
@@ -1118,24 +1118,6 @@ func (h *Host) Xinvoke_iijjiiiii(index int32, a0 int32, a1 int64, a2 int64, a3 i
 	h.trampoline(func() {
 		f := h.table()[index].(func(int32, int64, int64, int32, int32, int32, int32, int32) int32)
 		ret = f(a0, a1, a2, a3, a4, a5, a6, a7)
-	})
-	return ret
-}
-
-func (h *Host) Xinvoke_iijjji(index int32, a0 int32, a1 int64, a2 int64, a3 int64, a4 int32) int32 {
-	var ret int32
-	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int64, int64, int64, int32) int32)
-		ret = f(a0, a1, a2, a3, a4)
-	})
-	return ret
-}
-
-func (h *Host) Xinvoke_iijjjii(index int32, a0 int32, a1 int64, a2 int64, a3 int64, a4 int32, a5 int32) int32 {
-	var ret int32
-	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int64, int64, int64, int32, int32) int32)
-		ret = f(a0, a1, a2, a3, a4, a5)
 	})
 	return ret
 }
@@ -1176,11 +1158,11 @@ func (h *Host) Xinvoke_ijii(index int32, a0 int64, a1 int32, a2 int32) int32 {
 	return ret
 }
 
-func (h *Host) Xinvoke_ijj(index int32, a0 int64, a1 int64) int32 {
+func (h *Host) Xinvoke_ijij(index int32, a0 int64, a1 int32, a2 int64) int32 {
 	var ret int32
 	h.trampoline(func() {
-		f := h.table()[index].(func(int64, int64) int32)
-		ret = f(a0, a1)
+		f := h.table()[index].(func(int64, int32, int64) int32)
+		ret = f(a0, a1, a2)
 	})
 	return ret
 }
@@ -1194,11 +1176,11 @@ func (h *Host) Xinvoke_ijjiii(index int32, a0 int64, a1 int64, a2 int32, a3 int3
 	return ret
 }
 
-func (h *Host) Xinvoke_j(index int32) int64 {
+func (h *Host) Xinvoke_jd(index int32, a0 float64) int64 {
 	var ret int64
 	h.trampoline(func() {
-		f := h.table()[index].(func() int64)
-		ret = f()
+		f := h.table()[index].(func(float64) int64)
+		ret = f(a0)
 	})
 	return ret
 }
@@ -1208,24 +1190,6 @@ func (h *Host) Xinvoke_ji(index int32, a0 int32) int64 {
 	h.trampoline(func() {
 		f := h.table()[index].(func(int32) int64)
 		ret = f(a0)
-	})
-	return ret
-}
-
-func (h *Host) Xinvoke_jidiji(index int32, a0 int32, a1 float64, a2 int32, a3 int64, a4 int32) int64 {
-	var ret int64
-	h.trampoline(func() {
-		f := h.table()[index].(func(int32, float64, int32, int64, int32) int64)
-		ret = f(a0, a1, a2, a3, a4)
-	})
-	return ret
-}
-
-func (h *Host) Xinvoke_jifiji(index int32, a0 int32, a1 float32, a2 int32, a3 int64, a4 int32) int64 {
-	var ret int64
-	h.trampoline(func() {
-		f := h.table()[index].(func(int32, float32, int32, int64, int32) int64)
-		ret = f(a0, a1, a2, a3, a4)
 	})
 	return ret
 }
@@ -1298,15 +1262,6 @@ func (h *Host) Xinvoke_jiiiiiji(index int32, a0 int32, a1 int32, a2 int32, a3 in
 	h.trampoline(func() {
 		f := h.table()[index].(func(int32, int32, int32, int32, int32, int64, int32) int64)
 		ret = f(a0, a1, a2, a3, a4, a5, a6)
-	})
-	return ret
-}
-
-func (h *Host) Xinvoke_jiiiiijiiii(index int32, a0 int32, a1 int32, a2 int32, a3 int32, a4 int32, a5 int64, a6 int32, a7 int32, a8 int32, a9 int32) int64 {
-	var ret int64
-	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int32, int32, int32, int32, int64, int32, int32, int32, int32) int64)
-		ret = f(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9)
 	})
 	return ret
 }
@@ -1410,15 +1365,6 @@ func (h *Host) Xinvoke_jiiijiii(index int32, a0 int32, a1 int32, a2 int32, a3 in
 	return ret
 }
 
-func (h *Host) Xinvoke_jiiijiiii(index int32, a0 int32, a1 int32, a2 int32, a3 int64, a4 int32, a5 int32, a6 int32, a7 int32) int64 {
-	var ret int64
-	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int32, int32, int64, int32, int32, int32, int32) int64)
-		ret = f(a0, a1, a2, a3, a4, a5, a6, a7)
-	})
-	return ret
-}
-
 func (h *Host) Xinvoke_jiiijiijiii(index int32, a0 int32, a1 int32, a2 int32, a3 int64, a4 int32, a5 int32, a6 int64, a7 int32, a8 int32, a9 int32) int64 {
 	var ret int64
 	h.trampoline(func() {
@@ -1464,15 +1410,6 @@ func (h *Host) Xinvoke_jiiji(index int32, a0 int32, a1 int32, a2 int64, a3 int32
 	return ret
 }
 
-func (h *Host) Xinvoke_jiijii(index int32, a0 int32, a1 int32, a2 int64, a3 int32, a4 int32) int64 {
-	var ret int64
-	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int32, int64, int32, int32) int64)
-		ret = f(a0, a1, a2, a3, a4)
-	})
-	return ret
-}
-
 func (h *Host) Xinvoke_jiijiii(index int32, a0 int32, a1 int32, a2 int64, a3 int32, a4 int32, a5 int32) int64 {
 	var ret int64
 	h.trampoline(func() {
@@ -1487,15 +1424,6 @@ func (h *Host) Xinvoke_jiijiiii(index int32, a0 int32, a1 int32, a2 int64, a3 in
 	h.trampoline(func() {
 		f := h.table()[index].(func(int32, int32, int64, int32, int32, int32, int32) int64)
 		ret = f(a0, a1, a2, a3, a4, a5, a6)
-	})
-	return ret
-}
-
-func (h *Host) Xinvoke_jiijiiiiii(index int32, a0 int32, a1 int32, a2 int64, a3 int32, a4 int32, a5 int32, a6 int32, a7 int32, a8 int32) int64 {
-	var ret int64
-	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int32, int64, int32, int32, int32, int32, int32, int32) int64)
-		ret = f(a0, a1, a2, a3, a4, a5, a6, a7, a8)
 	})
 	return ret
 }
@@ -1545,29 +1473,20 @@ func (h *Host) Xinvoke_jiji(index int32, a0 int32, a1 int64, a2 int32) int64 {
 	return ret
 }
 
-func (h *Host) Xinvoke_jijij(index int32, a0 int32, a1 int64, a2 int32, a3 int64) int64 {
+func (h *Host) Xinvoke_jijii(index int32, a0 int32, a1 int64, a2 int32, a3 int32) int64 {
 	var ret int64
 	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int64, int32, int64) int64)
+		f := h.table()[index].(func(int32, int64, int32, int32) int64)
 		ret = f(a0, a1, a2, a3)
 	})
 	return ret
 }
 
-func (h *Host) Xinvoke_jijiji(index int32, a0 int32, a1 int64, a2 int32, a3 int64, a4 int32) int64 {
+func (h *Host) Xinvoke_jijij(index int32, a0 int32, a1 int64, a2 int32, a3 int64) int64 {
 	var ret int64
 	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int64, int32, int64, int32) int64)
-		ret = f(a0, a1, a2, a3, a4)
-	})
-	return ret
-}
-
-func (h *Host) Xinvoke_jijijii(index int32, a0 int32, a1 int64, a2 int32, a3 int64, a4 int32, a5 int32) int64 {
-	var ret int64
-	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int64, int32, int64, int32, int32) int64)
-		ret = f(a0, a1, a2, a3, a4, a5)
+		f := h.table()[index].(func(int32, int64, int32, int64) int64)
+		ret = f(a0, a1, a2, a3)
 	})
 	return ret
 }
@@ -1608,11 +1527,20 @@ func (h *Host) Xinvoke_jji(index int32, a0 int64, a1 int32) int64 {
 	return ret
 }
 
-func (h *Host) Xinvoke_jjiiii(index int32, a0 int64, a1 int32, a2 int32, a3 int32, a4 int32) int64 {
+func (h *Host) Xinvoke_jjij(index int32, a0 int64, a1 int32, a2 int64) int64 {
 	var ret int64
 	h.trampoline(func() {
-		f := h.table()[index].(func(int64, int32, int32, int32, int32) int64)
-		ret = f(a0, a1, a2, a3, a4)
+		f := h.table()[index].(func(int64, int32, int64) int64)
+		ret = f(a0, a1, a2)
+	})
+	return ret
+}
+
+func (h *Host) Xinvoke_jjiji(index int32, a0 int64, a1 int32, a2 int64, a3 int32) int64 {
+	var ret int64
+	h.trampoline(func() {
+		f := h.table()[index].(func(int64, int32, int64, int32) int64)
+		ret = f(a0, a1, a2, a3)
 	})
 	return ret
 }
@@ -1635,24 +1563,37 @@ func (h *Host) Xinvoke_jjjii(index int32, a0 int64, a1 int64, a2 int32, a3 int32
 	return ret
 }
 
+func (h *Host) Xinvoke_jjjij(index int32, a0 int64, a1 int64, a2 int32, a3 int64) int64 {
+	var ret int64
+	h.trampoline(func() {
+		f := h.table()[index].(func(int64, int64, int32, int64) int64)
+		ret = f(a0, a1, a2, a3)
+	})
+	return ret
+}
+
+func (h *Host) Xinvoke_jjjji(index int32, a0 int64, a1 int64, a2 int64, a3 int32) int64 {
+	var ret int64
+	h.trampoline(func() {
+		f := h.table()[index].(func(int64, int64, int64, int32) int64)
+		ret = f(a0, a1, a2, a3)
+	})
+	return ret
+}
+
+func (h *Host) Xinvoke_jjjjjjd(index int32, a0 int64, a1 int64, a2 int64, a3 int64, a4 int64, a5 float64) int64 {
+	var ret int64
+	h.trampoline(func() {
+		f := h.table()[index].(func(int64, int64, int64, int64, int64, float64) int64)
+		ret = f(a0, a1, a2, a3, a4, a5)
+	})
+	return ret
+}
+
 func (h *Host) Xinvoke_v(index int32) {
 	h.trampoline(func() {
 		f := h.table()[index].(func())
 		f()
-	})
-}
-
-func (h *Host) Xinvoke_vdi(index int32, a0 float64, a1 int32) {
-	h.trampoline(func() {
-		f := h.table()[index].(func(float64, int32))
-		f(a0, a1)
-	})
-}
-
-func (h *Host) Xinvoke_vfi(index int32, a0 float32, a1 int32) {
-	h.trampoline(func() {
-		f := h.table()[index].(func(float32, int32))
-		f(a0, a1)
 	})
 }
 
@@ -1667,6 +1608,13 @@ func (h *Host) Xinvoke_vid(index int32, a0 int32, a1 float64) {
 	h.trampoline(func() {
 		f := h.table()[index].(func(int32, float64))
 		f(a0, a1)
+	})
+}
+
+func (h *Host) Xinvoke_viddddi(index int32, a0 int32, a1 float64, a2 float64, a3 float64, a4 float64, a5 int32) {
+	h.trampoline(func() {
+		f := h.table()[index].(func(int32, float64, float64, float64, float64, int32))
+		f(a0, a1, a2, a3, a4, a5)
 	})
 }
 
@@ -1715,6 +1663,13 @@ func (h *Host) Xinvoke_viidddddddd(index int32, a0 int32, a1 int32, a2 float64, 
 func (h *Host) Xinvoke_viidii(index int32, a0 int32, a1 int32, a2 float64, a3 int32, a4 int32) {
 	h.trampoline(func() {
 		f := h.table()[index].(func(int32, int32, float64, int32, int32))
+		f(a0, a1, a2, a3, a4)
+	})
+}
+
+func (h *Host) Xinvoke_viidij(index int32, a0 int32, a1 int32, a2 float64, a3 int32, a4 int64) {
+	h.trampoline(func() {
+		f := h.table()[index].(func(int32, int32, float64, int32, int64))
 		f(a0, a1, a2, a3, a4)
 	})
 }
@@ -1807,6 +1762,13 @@ func (h *Host) Xinvoke_viiiiiiiiiiii(index int32, a0 int32, a1 int32, a2 int32, 
 	h.trampoline(func() {
 		f := h.table()[index].(func(int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32))
 		f(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11)
+	})
+}
+
+func (h *Host) Xinvoke_viiiiiiiiiiiii(index int32, a0 int32, a1 int32, a2 int32, a3 int32, a4 int32, a5 int32, a6 int32, a7 int32, a8 int32, a9 int32, a10 int32, a11 int32, a12 int32) {
+	h.trampoline(func() {
+		f := h.table()[index].(func(int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32))
+		f(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12)
 	})
 }
 
@@ -1957,13 +1919,6 @@ func (h *Host) Xinvoke_viiiijij(index int32, a0 int32, a1 int32, a2 int32, a3 in
 	})
 }
 
-func (h *Host) Xinvoke_viiiijijjj(index int32, a0 int32, a1 int32, a2 int32, a3 int32, a4 int64, a5 int32, a6 int64, a7 int64, a8 int64) {
-	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int32, int32, int32, int64, int32, int64, int64, int64))
-		f(a0, a1, a2, a3, a4, a5, a6, a7, a8)
-	})
-}
-
 func (h *Host) Xinvoke_viiiijj(index int32, a0 int32, a1 int32, a2 int32, a3 int32, a4 int64, a5 int64) {
 	h.trampoline(func() {
 		f := h.table()[index].(func(int32, int32, int32, int32, int64, int64))
@@ -1975,13 +1930,6 @@ func (h *Host) Xinvoke_viiiijji(index int32, a0 int32, a1 int32, a2 int32, a3 in
 	h.trampoline(func() {
 		f := h.table()[index].(func(int32, int32, int32, int32, int64, int64, int32))
 		f(a0, a1, a2, a3, a4, a5, a6)
-	})
-}
-
-func (h *Host) Xinvoke_viiiijjii(index int32, a0 int32, a1 int32, a2 int32, a3 int32, a4 int64, a5 int64, a6 int32, a7 int32) {
-	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int32, int32, int32, int64, int64, int32, int32))
-		f(a0, a1, a2, a3, a4, a5, a6, a7)
 	})
 }
 
@@ -2104,17 +2052,17 @@ func (h *Host) Xinvoke_viiijjii(index int32, a0 int32, a1 int32, a2 int32, a3 in
 	})
 }
 
-func (h *Host) Xinvoke_viiijjiii(index int32, a0 int32, a1 int32, a2 int32, a3 int64, a4 int64, a5 int32, a6 int32, a7 int32) {
-	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int32, int32, int64, int64, int32, int32, int32))
-		f(a0, a1, a2, a3, a4, a5, a6, a7)
-	})
-}
-
 func (h *Host) Xinvoke_viiijjj(index int32, a0 int32, a1 int32, a2 int32, a3 int64, a4 int64, a5 int64) {
 	h.trampoline(func() {
 		f := h.table()[index].(func(int32, int32, int32, int64, int64, int64))
 		f(a0, a1, a2, a3, a4, a5)
+	})
+}
+
+func (h *Host) Xinvoke_viiijjji(index int32, a0 int32, a1 int32, a2 int32, a3 int64, a4 int64, a5 int64, a6 int32) {
+	h.trampoline(func() {
+		f := h.table()[index].(func(int32, int32, int32, int64, int64, int64, int32))
+		f(a0, a1, a2, a3, a4, a5, a6)
 	})
 }
 
@@ -2363,6 +2311,13 @@ func (h *Host) Xinvoke_vijiiiji(index int32, a0 int32, a1 int64, a2 int32, a3 in
 	})
 }
 
+func (h *Host) Xinvoke_vijiij(index int32, a0 int32, a1 int64, a2 int32, a3 int32, a4 int64) {
+	h.trampoline(func() {
+		f := h.table()[index].(func(int32, int64, int32, int32, int64))
+		f(a0, a1, a2, a3, a4)
+	})
+}
+
 func (h *Host) Xinvoke_vijiiji(index int32, a0 int32, a1 int64, a2 int32, a3 int32, a4 int64, a5 int32) {
 	h.trampoline(func() {
 		f := h.table()[index].(func(int32, int64, int32, int32, int64, int32))
@@ -2370,17 +2325,17 @@ func (h *Host) Xinvoke_vijiiji(index int32, a0 int32, a1 int64, a2 int32, a3 int
 	})
 }
 
-func (h *Host) Xinvoke_vijiijii(index int32, a0 int32, a1 int64, a2 int32, a3 int32, a4 int64, a5 int32, a6 int32) {
-	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int64, int32, int32, int64, int32, int32))
-		f(a0, a1, a2, a3, a4, a5, a6)
-	})
-}
-
 func (h *Host) Xinvoke_vijij(index int32, a0 int32, a1 int64, a2 int32, a3 int64) {
 	h.trampoline(func() {
 		f := h.table()[index].(func(int32, int64, int32, int64))
 		f(a0, a1, a2, a3)
+	})
+}
+
+func (h *Host) Xinvoke_vijiji(index int32, a0 int32, a1 int64, a2 int32, a3 int64, a4 int32) {
+	h.trampoline(func() {
+		f := h.table()[index].(func(int32, int64, int32, int64, int32))
+		f(a0, a1, a2, a3, a4)
 	})
 }
 
@@ -2419,24 +2374,10 @@ func (h *Host) Xinvoke_vijjiii(index int32, a0 int32, a1 int64, a2 int64, a3 int
 	})
 }
 
-func (h *Host) Xinvoke_vijjiiijiiii(index int32, a0 int32, a1 int64, a2 int64, a3 int32, a4 int32, a5 int32, a6 int64, a7 int32, a8 int32, a9 int32, a10 int32) {
-	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int64, int64, int32, int32, int32, int64, int32, int32, int32, int32))
-		f(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10)
-	})
-}
-
 func (h *Host) Xinvoke_vijjij(index int32, a0 int32, a1 int64, a2 int64, a3 int32, a4 int64) {
 	h.trampoline(func() {
 		f := h.table()[index].(func(int32, int64, int64, int32, int64))
 		f(a0, a1, a2, a3, a4)
-	})
-}
-
-func (h *Host) Xinvoke_vijjiji(index int32, a0 int32, a1 int64, a2 int64, a3 int32, a4 int64, a5 int32) {
-	h.trampoline(func() {
-		f := h.table()[index].(func(int32, int64, int64, int32, int64, int32))
-		f(a0, a1, a2, a3, a4, a5)
 	})
 }
 
@@ -2482,10 +2423,24 @@ func (h *Host) Xinvoke_vjiiii(index int32, a0 int64, a1 int32, a2 int32, a3 int3
 	})
 }
 
+func (h *Host) Xinvoke_vjiiiiiii(index int32, a0 int64, a1 int32, a2 int32, a3 int32, a4 int32, a5 int32, a6 int32, a7 int32) {
+	h.trampoline(func() {
+		f := h.table()[index].(func(int64, int32, int32, int32, int32, int32, int32, int32))
+		f(a0, a1, a2, a3, a4, a5, a6, a7)
+	})
+}
+
 func (h *Host) Xinvoke_vjiiij(index int32, a0 int64, a1 int32, a2 int32, a3 int32, a4 int64) {
 	h.trampoline(func() {
 		f := h.table()[index].(func(int64, int32, int32, int32, int64))
 		f(a0, a1, a2, a3, a4)
+	})
+}
+
+func (h *Host) Xinvoke_vjij(index int32, a0 int64, a1 int32, a2 int64) {
+	h.trampoline(func() {
+		f := h.table()[index].(func(int64, int32, int64))
+		f(a0, a1, a2)
 	})
 }
 

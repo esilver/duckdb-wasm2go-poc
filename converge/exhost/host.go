@@ -30,6 +30,7 @@ package exhost
 
 import (
 	"fmt"
+	"os"
 	"sync"
 )
 
@@ -110,7 +111,18 @@ type Host struct {
 	// Trace, when true, records the ABI call order for tests/debugging.
 	Trace bool
 	log   []string
+
+	// lastThrowMsg is the what() message of the most recently thrown exception,
+	// decoded from the object at __cxa_throw time. DuckDB's convert-and-rethrow
+	// error path loses the message from the C-API result (duckdb_result_error
+	// returns null); the driver falls back to this so failed queries still report
+	// why. Best-effort: assumes the std::runtime_error (libc++) layout.
+	lastThrowMsg string
 }
+
+// LastThrowMessage returns the message of the most recently thrown C++ exception
+// (best-effort; std::runtime_error-derived, which includes all duckdb::Exception).
+func (h *Host) LastThrowMessage() string { return h.lastThrowMsg }
 
 type excRecord struct {
 	exc int32 // exception object header pointer (what __cxa_throw was given)
@@ -151,6 +163,29 @@ func (h *Host) logf(f string, a ...any) {
 }
 
 func (h *Host) table() []any { return h.abi.Table() }
+
+// DebugThrow, when set, logs every __cxa_throw's C++ type_info name to stderr.
+var DebugThrow = false
+
+// cstrU32 reads a NUL-terminated C string from module memory 4 bytes at a time
+// (diagnostic only; used to decode std::type_info names).
+func (h *Host) cstrU32(ptr int32) string {
+	if ptr == 0 {
+		return ""
+	}
+	var b []byte
+	for i := int32(0); i < 512; i += 4 {
+		w := uint32(h.abi.ReadU32(ptr + i))
+		for s := 0; s < 4; s++ {
+			c := byte(w >> (8 * s))
+			if c == 0 {
+				return string(b)
+			}
+			b = append(b, c)
+		}
+	}
+	return string(b)
+}
 
 // typeID maps a std::type_info pointer to a stable nonzero id. A zero typeinfo
 // (the "catch (...)" / unknown case) collapses to id 1 so a catch-all matches.
@@ -198,6 +233,17 @@ func (h *Host) trampoline(do func()) {
 // to the active invoke_ trampoline via panic. (T1)
 func (h *Host) X__cxa_throw(ptr, typ, dtor int32) {
 	h.logf("__cxa_throw ptr=%d typ=%d dtor=%d", ptr, typ, dtor)
+	// Capture the what() message (libc++ runtime_error refstring char* at +4) so the
+	// driver can recover it when DuckDB's convert-and-rethrow loses it from the
+	// C-API result.
+	h.lastThrowMsg = h.cstrU32(h.abi.ReadU32(ptr + 4))
+	if DebugThrow {
+		name := ""
+		if typ != 0 {
+			name = h.cstrU32(h.abi.ReadU32(typ + 4)) // type_info::__name (Itanium, wasm32)
+		}
+		fmt.Fprintf(os.Stderr, "[exhost] __cxa_throw type=%q msg=%q\n", name, h.lastThrowMsg)
+	}
 	h.inflight = append(h.inflight, excRecord{exc: ptr, typ: typ})
 	h.uncaught++
 	panic(thrownPanic{exc: ptr, typ: typ})
@@ -266,11 +312,20 @@ func (h *Host) findMatch(catchTypes ...int32) int32 {
 
 	for _, ct := range catchTypes {
 		h.abi.WriteU32(slot, objPtr)
-		if h.abi.CanCatch(ct, rec.typ, slot) != 0 {
+		cc := h.abi.CanCatch(ct, rec.typ, slot)
+		if DebugThrow {
+			fmt.Fprintf(os.Stderr, "[exhost] findMatch thrown=%q candidate catch=%q canCatch=%d\n",
+				h.cstrU32(h.abi.ReadU32(rec.typ+4)), h.cstrU32(h.abi.ReadU32(ct+4)), cc)
+		}
+		if cc != 0 {
 			matchedType = ct
 			found = true
 			break
 		}
+	}
+	if DebugThrow && len(catchTypes) == 0 {
+		fmt.Fprintf(os.Stderr, "[exhost] findMatch thrown=%q candidates=NONE (catch-all/cleanup)\n",
+			h.cstrU32(h.abi.ReadU32(rec.typ+4)))
 	}
 	h.abi.Free(slot)
 

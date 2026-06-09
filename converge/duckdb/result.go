@@ -86,6 +86,10 @@ type rows struct {
 	chunk    int32 // current duckdb_data_chunk handle (0 = none held)
 	chunkLen int   // rows in the current chunk
 	cursor   int   // next row index within the current chunk
+	// listDecs lazily caches a vecDecoder per LIST column for the CURRENT chunk
+	// (LIST cells need the vector handle to reach the shared child vector, which
+	// the flat decode path doesn't carry). Reset whenever the chunk is released.
+	listDecs map[int]*vecDecoder
 
 	closed bool
 }
@@ -175,6 +179,7 @@ func (r *rows) releaseChunk() {
 	r.chunk = 0
 	r.chunkLen = 0
 	r.cursor = 0
+	r.listDecs = nil
 }
 
 // Next decodes the next row into dest. Returns io.EOF when the result is drained.
@@ -217,6 +222,21 @@ func (r *rows) Next(dest []driver.Value) (err error) {
 
 		if !rowValid(mod, validPtr, row) {
 			dest[col] = nil
+			continue
+		}
+		if r.typeIDs[col] == dtList {
+			// Native LIST result column (e.g. a bare ARRAY_AGG/list() in the
+			// SELECT): decode recursively to []any of decoded child cells, the
+			// same shape duckdb-go scans (and the UDF argument path delivers).
+			d := r.listDecs[col]
+			if d == nil {
+				d = mod.newVecDecoder(vec)
+				if r.listDecs == nil {
+					r.listDecs = make(map[int]*vecDecoder)
+				}
+				r.listDecs[col] = d
+			}
+			dest[col] = d.cell(int64(row))
 			continue
 		}
 		dest[col] = r.decode(col, dataPtr, row)

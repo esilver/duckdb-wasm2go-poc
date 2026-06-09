@@ -32,6 +32,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"os"
 	"sync"
 	"time"
 )
@@ -73,6 +74,21 @@ type Shim struct {
 	Log []string
 
 	startTime time.Time
+
+	// Filesystem state (see fs.go). fds maps a WASI file descriptor to its open
+	// entry; nextFd is the next descriptor to hand out; preopenRoot is the host
+	// directory mapped to the single preopen at fd 3 (preopenFd). fsInit guards
+	// lazy initialization so the table is set up on first FS use.
+	fds         map[int32]*fdEntry
+	nextFd      int32
+	preopenRoot string
+	preopenName string
+
+	// Path-B host filesystem state (see hostfs.go). The Tier-2 "custom DuckDB
+	// FileSystem" build (duckdb_fs.wasm) imports env.host_* functions that map a
+	// small fd table directly to *os.File handles, bypassing the WASI seam above.
+	hostFds    map[int32]*os.File
+	hostNextFd int32
 }
 
 // New returns a Shim writing program output to stdout/stderr writers.
@@ -146,37 +162,8 @@ func (s *Shim) Xemscripten_notify_memory_growth(index int32) {}
 
 // ---- WASI snapshot preview1 -----------------------------------------------
 
-// fd_write(fd, iovsPtr, iovsLen, nwrittenPtr): gather-write the iovecs to the
-// host writer for fd 1 (stdout) / 2 (stderr). Other fds are unsupported here.
-func (s *Shim) Xfd_write(fd, iovsPtr, iovsLen, nwrittenPtr int32) int32 {
-	var w io.Writer
-	switch fd {
-	case 1:
-		w = s.Stdout
-	case 2:
-		w = s.Stderr
-	default:
-		s.logf("fd_write to unsupported fd=%d", fd)
-		return wasiEBADF
-	}
-	mem := s.memb()
-	var total uint32
-	for i := int32(0); i < iovsLen; i++ {
-		base := iovsPtr + i*8
-		ptr := int32(binary.LittleEndian.Uint32(mem[base:]))
-		ln := int32(binary.LittleEndian.Uint32(mem[base+4:]))
-		if ln > 0 {
-			if w != nil {
-				w.Write(mem[ptr : ptr+ln])
-			}
-			total += uint32(ln)
-		}
-	}
-	if nwrittenPtr != 0 {
-		binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
-	}
-	return wasiESUCCESS
-}
+// fd_write is implemented in fs.go (it keeps fd 1/2 -> stdout/stderr and routes
+// other fds to the OS-backed file table).
 
 // random_get(bufPtr, bufLen): fill module memory with cryptographic randomness.
 func (s *Shim) Xrandom_get(bufPtr, bufLen int32) int32 {
@@ -234,61 +221,12 @@ func (s *Shim) Xproc_exit(code int32) {
 	panic(ExitError{Code: code, Reason: "proc_exit"})
 }
 
-// ---- STUBBED filesystem-backed WASI (in-memory SELECT 1 must not need these) -
-
-func (s *Shim) Xfd_read(fd, iovsPtr, iovsLen, nreadPtr int32) int32 {
-	s.logf("STUB fd_read(fd=%d) -> ENOSYS", fd)
-	if nreadPtr != 0 {
-		binary.LittleEndian.PutUint32(s.memb()[nreadPtr:], 0)
-	}
-	return wasiENOSYS
-}
-
-func (s *Shim) Xfd_seek(fd int32, offset int64, whence, newOffsetPtr int32) int32 {
-	s.logf("STUB fd_seek(fd=%d) -> ENOSYS", fd)
-	return wasiENOSYS
-}
-
-func (s *Shim) Xfd_close(fd int32) int32 {
-	s.logf("STUB fd_close(fd=%d) -> ENOSYS", fd)
-	return wasiENOSYS
-}
-
-func (s *Shim) Xfd_sync(fd int32) int32 {
-	s.logf("STUB fd_sync(fd=%d) -> ENOSYS", fd)
-	return wasiENOSYS
-}
-
-func (s *Shim) Xfd_fdstat_get(fd, statPtr int32) int32 {
-	s.logf("STUB fd_fdstat_get(fd=%d) -> ENOSYS", fd)
-	return wasiENOSYS
-}
-
-func (s *Shim) Xfd_fdstat_set_flags(fd, flags int32) int32 {
-	s.logf("STUB fd_fdstat_set_flags(fd=%d) -> ENOSYS", fd)
-	return wasiENOSYS
-}
-
-func (s *Shim) Xfd_prestat_get(fd, prestatPtr int32) int32 {
-	// EBADF here tells the wasm there are no preopened dirs, ending its scan
-	// cleanly without logging noise.
-	return wasiEBADF
-}
-
-func (s *Shim) Xfd_prestat_dir_name(fd, pathPtr, pathLen int32) int32 {
-	s.logf("STUB fd_prestat_dir_name(fd=%d) -> ENOSYS", fd)
-	return wasiENOSYS
-}
-
-func (s *Shim) Xpath_open(dirFd, dirFlags, pathPtr, pathLen, oflags int32, fsRightsBase, fsRightsInheriting int64, fdFlags, openedFdPtr int32) int32 {
-	s.logf("STUB path_open -> ENOSYS")
-	return wasiENOSYS
-}
-
-func (s *Shim) Xpath_filestat_get(dirFd, flags, pathPtr, pathLen, statPtr int32) int32 {
-	s.logf("STUB path_filestat_get -> ENOSYS")
-	return wasiENOSYS
-}
+// NOTE: the WASI filesystem-backed calls (fd_read, fd_pread, fd_seek, fd_close,
+// fd_sync, fd_datasync, fd_tell, fd_fdstat_get, fd_fdstat_set_flags,
+// fd_filestat_get, fd_prestat_get, fd_prestat_dir_name, fd_readdir, path_open,
+// path_filestat_get, path_create_directory, path_unlink_file,
+// path_remove_directory, path_rename, path_filestat_set_times) are implemented
+// in fs.go, backed by the real OS via the os package.
 
 // ---- STUBBED emscripten __syscall_* (FILESYSTEM=0 should not call these) ----
 
@@ -371,21 +309,7 @@ func (s *Shim) X_tzset_js(timezonePtr, daylightPtr, stdNamePtr, dstNamePtr int32
 // NEGATIVE errno (musl convention), WASI fd_* returns a positive errno, and the
 // getaddrinfo/getnameinfo netdb calls return a positive EAI/error code.
 
-// fd_pread / fd_pwrite (wasi): positional file I/O, unused for :memory:.
-func (s *Shim) Xfd_pread(fd, iovsPtr, iovsLen int32, offset int64, nreadPtr int32) int32 {
-	s.logf("STUB fd_pread(fd=%d) -> ENOSYS", fd)
-	if nreadPtr != 0 {
-		binary.LittleEndian.PutUint32(s.memb()[nreadPtr:], 0)
-	}
-	return wasiENOSYS
-}
-func (s *Shim) Xfd_pwrite(fd, iovsPtr, iovsLen int32, offset int64, nwrittenPtr int32) int32 {
-	s.logf("STUB fd_pwrite(fd=%d) -> ENOSYS", fd)
-	if nwrittenPtr != 0 {
-		binary.LittleEndian.PutUint32(s.memb()[nwrittenPtr:], 0)
-	}
-	return wasiENOSYS
-}
+// fd_pread / fd_pwrite (wasi) are implemented in fs.go.
 
 // Additional emscripten __syscall_* (FILESYSTEM=0 + :memory: must not call these).
 func (s *Shim) X__syscall_faccessat(dirFd, pathPtr, mode, flags int32) int32 {

@@ -64,42 +64,15 @@ func (mod *module) registerScalarEx(con int32, name string, paramTypeIDs []int32
 		// a variadic call passes more columns than the declared fixed params.
 		nCols := int(m.Xduckdb_data_chunk_get_column_count(input))
 
-		// Snapshot each input column's vector data buffer, validity mask, and runtime
-		// type metadata once per chunk (all stable for the chunk's lifetime), then
-		// decode row-by-row. The runtime type id (from the vector's column logical
-		// type) is used instead of the declared paramTypeIDs so ANY-typed varargs and
-		// any implicit coercions decode correctly. DECIMAL columns also capture scale +
-		// internal storage type for exact decoding via readCellT.
-		dataPtrs := make([]int32, nCols)
-		validPtrs := make([]int32, nCols)
-		colTypes := make([]int32, nCols)
-		colScales := make([]int32, nCols)
-		colInternals := make([]int32, nCols)
-		colJSON := make([]bool, nCols)
+		// Snapshot each input column's decode metadata once per chunk (all stable
+		// for the chunk's lifetime), then decode row-by-row. vecDecoder resolves
+		// each column's RUNTIME type (essential for ANY-typed varargs, instead of
+		// the declared paramTypeIDs), DECIMAL scale/backing type, the JSON alias
+		// (cells arrive wrapped as JSONValue for the duckdbcompat layer), and
+		// LIST columns (cells arrive as []any of decoded child cells).
+		decs := make([]*vecDecoder, nCols)
 		for c := 0; c < nCols; c++ {
-			vec := m.Xduckdb_data_chunk_get_vector(input, int64(c))
-			dataPtrs[c] = m.Xduckdb_vector_get_data(vec)
-			validPtrs[c] = m.Xduckdb_vector_get_validity(vec)
-			// duckdb_vector_get_column_type allocates a fresh logical type handle that
-			// must be destroyed (same contract as result.go's column types).
-			lt := m.Xduckdb_vector_get_column_type(vec)
-			colTypes[c] = m.Xduckdb_get_type_id(lt)
-			colInternals[c] = dtBigint
-			if colTypes[c] == dtDecimal {
-				colScales[c] = m.Xduckdb_decimal_scale(lt)
-				colInternals[c] = m.Xduckdb_decimal_internal_type(lt)
-			}
-			if colTypes[c] == dtVarchar {
-				// JSON columns are VARCHAR-backed; the alias is the only signal. Cells
-				// arrive wrapped as JSONValue so callers (the duckdbcompat layer, which
-				// mimics duckdb-go's scan-JSON-to-native-Go behavior) can tell JSON text
-				// apart from a plain string. Mirrors registerAggregateBand.
-				if ap := m.Xduckdb_logical_type_get_alias(lt); ap != 0 {
-					colJSON[c] = mod.goString(ap) == "JSON"
-					m.Xduckdb_free(ap)
-				}
-			}
-			destroyLogicalType(mod, lt)
+			decs[c] = mod.newVecDecoder(m.Xduckdb_data_chunk_get_vector(input, int64(c)))
 		}
 
 		outData := m.Xduckdb_vector_get_data(output)
@@ -107,13 +80,7 @@ func (mod *module) registerScalarEx(con int32, name string, paramTypeIDs []int32
 
 		for r := int64(0); r < n; r++ {
 			for c := 0; c < nCols; c++ {
-				v := mod.readCellT(colTypes[c], colScales[c], colInternals[c], dataPtrs[c], validPtrs[c], r)
-				if colJSON[c] {
-					if s, ok := v.(string); ok {
-						v = JSONValue(s)
-					}
-				}
-				args[c] = v
+				args[c] = decs[c].cell(r)
 			}
 			res, err := fn(args)
 			if err != nil {

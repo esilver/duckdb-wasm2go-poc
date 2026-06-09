@@ -65,14 +65,30 @@ func coerceJSONNumbers(v any) any {
 }
 
 // jsonAwareExecutor wraps a RowExecutor so JSONValue arguments arrive parsed,
-// duckdb-go style. Non-JSON arguments pass through untouched.
+// duckdb-go style. The normalization recurses into []any arguments (LIST cells
+// decode to []any and their elements can be JSON-alias cells — e.g. array_agg
+// over a json_each column, the STRING_AGG lowering's shape). Non-JSON
+// arguments pass through untouched.
 func jsonAwareExecutor(fn func(values []driver.Value) (any, error)) func(values []driver.Value) (any, error) {
 	return func(values []driver.Value) (any, error) {
 		for i, v := range values {
-			if j, ok := v.(convergeduckdb.JSONValue); ok {
-				values[i] = jsonNative(string(j))
-			}
+			values[i] = normalizeJSONArg(v)
 		}
 		return fn(values)
 	}
+}
+
+// normalizeJSONArg rewrites JSONValue nodes (recursively through []any) to
+// their parsed native form.
+func normalizeJSONArg(v driver.Value) driver.Value {
+	switch t := v.(type) {
+	case convergeduckdb.JSONValue:
+		return jsonNative(string(t))
+	case []any:
+		for i := range t {
+			t[i] = normalizeJSONArg(t[i])
+		}
+		return t
+	}
+	return v
 }

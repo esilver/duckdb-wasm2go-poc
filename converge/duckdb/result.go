@@ -165,7 +165,8 @@ func (r *rows) releaseChunk() {
 }
 
 // Next decodes the next row into dest. Returns io.EOF when the result is drained.
-func (r *rows) Next(dest []driver.Value) error {
+func (r *rows) Next(dest []driver.Value) (err error) {
+	defer guardEnginePanic(&err)
 	mod := r.mod
 	// Advance to a chunk that still has rows.
 	for r.chunk == 0 || r.cursor >= r.chunkLen {

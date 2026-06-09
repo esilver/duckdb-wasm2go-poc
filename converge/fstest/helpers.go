@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	core "duckdbconverge/fsgenpkg"
+	core "duckdbconverge/genpkg"
 )
 
 // sizeofDuckdbResult over-allocates duckdb_result (see main.go in converge/).

@@ -75,6 +75,7 @@ func (mod *module) registerScalarEx(con int32, name string, paramTypeIDs []int32
 		colTypes := make([]int32, nCols)
 		colScales := make([]int32, nCols)
 		colInternals := make([]int32, nCols)
+		colJSON := make([]bool, nCols)
 		for c := 0; c < nCols; c++ {
 			vec := m.Xduckdb_data_chunk_get_vector(input, int64(c))
 			dataPtrs[c] = m.Xduckdb_vector_get_data(vec)
@@ -88,6 +89,16 @@ func (mod *module) registerScalarEx(con int32, name string, paramTypeIDs []int32
 				colScales[c] = m.Xduckdb_decimal_scale(lt)
 				colInternals[c] = m.Xduckdb_decimal_internal_type(lt)
 			}
+			if colTypes[c] == dtVarchar {
+				// JSON columns are VARCHAR-backed; the alias is the only signal. Cells
+				// arrive wrapped as JSONValue so callers (the duckdbcompat layer, which
+				// mimics duckdb-go's scan-JSON-to-native-Go behavior) can tell JSON text
+				// apart from a plain string. Mirrors registerAggregateBand.
+				if ap := m.Xduckdb_logical_type_get_alias(lt); ap != 0 {
+					colJSON[c] = mod.goString(ap) == "JSON"
+					m.Xduckdb_free(ap)
+				}
+			}
 			destroyLogicalType(mod, lt)
 		}
 
@@ -96,7 +107,13 @@ func (mod *module) registerScalarEx(con int32, name string, paramTypeIDs []int32
 
 		for r := int64(0); r < n; r++ {
 			for c := 0; c < nCols; c++ {
-				args[c] = mod.readCellT(colTypes[c], colScales[c], colInternals[c], dataPtrs[c], validPtrs[c], r)
+				v := mod.readCellT(colTypes[c], colScales[c], colInternals[c], dataPtrs[c], validPtrs[c], r)
+				if colJSON[c] {
+					if s, ok := v.(string); ok {
+						v = JSONValue(s)
+					}
+				}
+				args[c] = v
 			}
 			res, err := fn(args)
 			if err != nil {

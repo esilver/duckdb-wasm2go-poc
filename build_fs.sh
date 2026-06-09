@@ -8,17 +8,26 @@ set -eu
 HERE=${0:a:h}
 DS=$HERE/duckdb-src
 OUT=${1:-$HERE/duckdb_fs.wasm}
-EXPORTS="$(cat /tmp/exports_arg.txt),_register_host_fs,_host_fs_attach_to_config,_duckdb_open_ext,_duckdb_destroy_config"
+# The C-API export list lives in-repo (exports_arg.txt); /tmp/exports_arg.txt
+# was its original ad-hoc home and remains only as a fallback.
+EXPORTS="$(cat "$HERE/exports_arg.txt" 2>/dev/null || cat /tmp/exports_arg.txt),_register_host_fs,_host_fs_attach_to_config,_duckdb_open_ext,_duckdb_destroy_config"
 
 CF_SRCS=($(find "$DS/extension/core_functions" -name '*.cpp'))
-echo "core_functions TUs: ${#CF_SRCS[@]} ; exported fns: $(echo $EXPORTS | tr ',' '\n' | wc -l)"
+# json extension: json_each / json_extract / the JSON type. Statically linked
+# like core_functions (the googlesqlite UNNEST lowering needs json_each). Its
+# yyjson dependency is already inside the amalgamation — do NOT compile
+# third_party/yyjson separately (duplicate symbols).
+JSON_SRCS=($(find "$DS/extension/json" -name '*.cpp'))
+echo "core_functions TUs: ${#CF_SRCS[@]} ; json TUs: ${#JSON_SRCS[@]} ; exported fns: $(echo $EXPORTS | tr ',' '\n' | wc -l)"
 
 emcc \
   "$HERE/amalg/duckdb.cpp" \
   "${CF_SRCS[@]}" \
+  "${JSON_SRCS[@]}" \
   "$HERE/register_core_functions.cpp" \
   "$HERE/host_fs.cpp" \
   -I"$DS/src/include" -I"$DS/extension/core_functions/include" \
+  -I"$DS/extension/json/include" \
   -I"$DS/third_party/skiplist" -I"$DS/third_party/pcg" -I"$DS/third_party/tdigest" \
   -I"$DS/third_party/jaro_winkler" -I"$DS/third_party/utf8proc/include" \
   -I"$DS/third_party/fmt/include" -I"$DS/third_party/re2" -I"$DS/third_party/fast_float" \

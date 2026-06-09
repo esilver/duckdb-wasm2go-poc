@@ -19,7 +19,7 @@ import (
 	"os"
 	"path/filepath"
 
-	core "duckdbconverge/fsgenpkg"
+	core "duckdbconverge/genpkg"
 
 	"duckdbconverge/exhost"
 	"duckdbconverge/wasishim"

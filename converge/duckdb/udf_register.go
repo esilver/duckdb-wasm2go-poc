@@ -70,6 +70,18 @@ func RegisterAggregateConn(c *sql.Conn, name string, paramTypeIDs []int32, retTy
 	})
 }
 
+// RegisterAggregateBandConn registers a Go aggregate function under `name` for every
+// arity in opts' [MinArgs, MaxArgs] band, parameters typed ANY (see AggregateOptions
+// and registerAggregateBand for the full conventions: runtime-typed decode, DECIMAL
+// as float64, JSON-alias cells as JSONValue, NULL rows delivered as nil args). This
+// is the registration shape the googlesqlite emulator's 32 aggregate specs need.
+// Registration is catalog-scoped (visible to all connections sharing c's database).
+func RegisterAggregateBandConn(c *sql.Conn, name string, opts AggregateOptions, impl AggregateImpl) error {
+	return withConn(c, func(co *conn) error {
+		return co.mod.registerAggregateBand(co.con, name, opts, impl)
+	})
+}
+
 // ExecConn runs an argument-less SQL statement on the engine behind c and discards
 // any result. It is the backing for the compat table-UDF shim, which emits a
 // `CREATE TABLE <name>(...)` (a zero-row stub) instead of a real table function.

@@ -311,6 +311,17 @@ func (h *Host) findMatch(catchTypes ...int32) int32 {
 	found := len(catchTypes) == 0 // _2 (no candidates) is a catch-all
 
 	for _, ct := range catchTypes {
+		if ct == 0 {
+			// A catch (...) clause arrives as a NULL typeinfo candidate and
+			// matches every exception unconditionally (Emscripten's
+			// findMatchingCatch does the same). Probing the module's
+			// __cxa_can_catch with 0 instead virtual-calls through address 0
+			// and crashes — seen on the scalar-UDF error path, whose landing
+			// pad is {InvalidInputException-cleanup, catch(...)}.
+			matchedType = 0
+			found = true
+			break
+		}
 		h.abi.WriteU32(slot, objPtr)
 		cc := h.abi.CanCatch(ct, rec.typ, slot)
 		if DebugThrow {

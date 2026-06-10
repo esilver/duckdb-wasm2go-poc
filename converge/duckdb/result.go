@@ -91,6 +91,11 @@ type rows struct {
 
 	names   []string
 	typeIDs []int32 // duckdb_type id per column
+	// typeNames[col] is the column's full DuckDB type name (recursive for
+	// nested types, see typename.go), surfaced through database/sql's
+	// ColumnType.DatabaseTypeName — the only channel the runner has to learn a
+	// temporal column's face (TIME vs DATE vs TIMESTAMP all decode to time.Time).
+	typeNames []string
 	// colJSON[col] marks a VARCHAR-backed column whose logical type carries the
 	// "JSON" alias; its cells scan as the PARSED native Go value (duckdb-go
 	// semantics, see DecodeJSONNative) rather than the raw JSON text.
@@ -176,6 +181,7 @@ func newRows(mod *module, resPtr int32) (driver.Rows, error) {
 		resPtr:      resPtr,
 		names:       make([]string, n),
 		typeIDs:     make([]int32, n),
+		typeNames:   make([]string, n),
 		colJSON:     make([]bool, n),
 		decimalMeta: map[int]decimalInfo{},
 		enumMeta:    map[int]enumInfo{},
@@ -190,6 +196,7 @@ func newRows(mod *module, resPtr int32) (driver.Rows, error) {
 		lt := mod.m.Xduckdb_column_logical_type(resPtr, int64(col))
 		tid := mod.m.Xduckdb_get_type_id(lt)
 		r.typeIDs[col] = tid
+		r.typeNames[col] = typeName(mod, lt)
 		if tid == dtDecimal {
 			r.decimalMeta[col] = decimalInfo{
 				width:    uint8(mod.m.Xduckdb_decimal_width(lt)),
@@ -219,6 +226,12 @@ func newRows(mod *module, resPtr int32) (driver.Rows, error) {
 
 // Columns returns the column names in result order.
 func (r *rows) Columns() []string { return r.names }
+
+// ColumnTypeDatabaseTypeName implements driver.RowsColumnTypeDatabaseTypeName
+// (the same metadata hook duckdb-go provides): the column's DuckDB type name,
+// recursive for nested types — e.g. "TIME[]", "MAP(TIMESTAMP, BIGINT)",
+// `STRUCT("a" DATE)`. See typename.go.
+func (r *rows) ColumnTypeDatabaseTypeName(index int) string { return r.typeNames[index] }
 
 // Close releases the current chunk (if any), destroys the engine-side result, and
 // frees the resPtr buffer. Safe to call more than once.

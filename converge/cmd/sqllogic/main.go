@@ -167,6 +167,11 @@ func main() {
 			return
 		}
 		cols, _ := rows.Columns()
+		cts, _ := rows.ColumnTypes()
+		types := parseColTypes(cts, len(cols))
+		for i, ct := range cts {
+			fmt.Printf("col %d type: %s\n", i+1, ct.DatabaseTypeName())
+		}
 		for rows.Next() {
 			vals := make([]any, len(cols))
 			ptrs := make([]any, len(cols))
@@ -178,7 +183,7 @@ func main() {
 				break
 			}
 			for i, v := range vals {
-				fmt.Printf("col %d: %T %q -> %s\n", i+1, v, fmt.Sprint(v), valueToString(v))
+				fmt.Printf("col %d: %T %q -> %s\n", i+1, v, fmt.Sprint(v), valueToString(v, types[i], nil))
 			}
 		}
 		rows.Close()
@@ -1283,6 +1288,10 @@ func (st *execState) execQuery(r *record, subs []sub) error {
 	}
 	cols, _ := rows.Columns()
 	ncols := len(cols)
+	// Column type names (driver typename.go) carry the temporal faces the
+	// decoded values lack; must be read while rows are open.
+	cts, _ := rows.ColumnTypes()
+	colTypes := parseColTypes(cts, ncols)
 	var resultVals []any
 	for rows.Next() {
 		ptrs := make([]any, ncols)
@@ -1338,7 +1347,7 @@ func (st *execState) execQuery(r *record, subs []sub) error {
 		// convert all values, apply sort, hash
 		strs := make([]string, len(resultVals))
 		for i, v := range resultVals {
-			strs[i] = valueToString(v)
+			strs[i] = valueToString(v, colTypes[i%ncols], st.tz)
 		}
 		applySort(r.sortStyle, strs, ncols)
 		h := md5.New()
@@ -1388,7 +1397,7 @@ func (st *execState) execQuery(r *record, subs []sub) error {
 
 	actStrs := make([]string, len(resultVals))
 	for i, v := range resultVals {
-		actStrs[i] = valueToString(v)
+		actStrs[i] = valueToString(v, colTypes[i%ncols], st.tz)
 	}
 	sortedVals := resultVals
 	if r.sortStyle != "" {
@@ -1529,11 +1538,193 @@ func rowLess(a, b []string) bool {
 	return false
 }
 
+// ---------------------------------------------------------------- column types
+
+// Temporal faces a result position can have. TIME, DATE and every TIMESTAMP
+// width all decode to a bare time.Time, but DuckDB renders each differently
+// ('12:13:14' / 2000-01-01 / '2000-01-01 00:00:00' inside containers, and a
+// TIMESTAMPTZ in the session zone with an offset suffix). The face comes from
+// the column's DatabaseTypeName (driver typename.go), parsed into a colType.
+const (
+	faceNone = iota
+	faceDate
+	faceTime
+	faceTimestamp
+	faceTimestampTZ
+	// faceFloat32: FLOAT columns decode widened to float64 (the driver has no
+	// float32 carrier); rendering must round back through float32 to get
+	// DuckDB's shortest-roundtrip form (-3.4e+38, not -3.39999995e+38).
+	faceFloat32
+)
+
+// colType is the parsed shape of one column's DuckDB type name: the temporal
+// face at scalar positions plus the container structure needed to recurse in
+// step with the decoded value ([]any / duckdb.Struct / duckdb.MapValue).
+type colType struct {
+	face   int
+	elem   *colType   // LIST/ARRAY element
+	key    *colType   // MAP key
+	val    *colType   // MAP value
+	fields []*colType // STRUCT fields in declared order
+}
+
+// nil-tolerant child accessors: an unknown/unparsed type renders with the
+// face-less fallback heuristics at every position.
+func (t *colType) elemType() *colType {
+	if t == nil {
+		return nil
+	}
+	return t.elem
+}
+func (t *colType) keyType() *colType {
+	if t == nil {
+		return nil
+	}
+	return t.key
+}
+func (t *colType) valType() *colType {
+	if t == nil {
+		return nil
+	}
+	return t.val
+}
+func (t *colType) fieldType(i int) *colType {
+	if t == nil || i >= len(t.fields) {
+		return nil
+	}
+	return t.fields[i]
+}
+
+// parseColType parses the driver's DatabaseTypeName rendering (typename.go):
+// scalar names, `child[]` (LIST), `child[N]` (ARRAY), MAP(key, value),
+// STRUCT("name" TYPE, ...). UNION members are deliberately not modeled — the
+// decoded value is the ACTIVE member, which the type alone cannot identify —
+// so positions under a UNION keep face heuristics. Unknown names parse to a
+// face-less scalar.
+func parseColType(s string) *colType {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	if strings.HasSuffix(s, "]") {
+		if open := strings.LastIndexByte(s, '['); open > 0 && allDigits(s[open+1:len(s)-1]) {
+			return &colType{elem: parseColType(s[:open])}
+		}
+	}
+	switch {
+	case strings.HasPrefix(s, "MAP(") && strings.HasSuffix(s, ")"):
+		if parts := splitTopLevel(s[4 : len(s)-1]); len(parts) == 2 {
+			return &colType{key: parseColType(parts[0]), val: parseColType(parts[1])}
+		}
+		return &colType{}
+	case strings.HasPrefix(s, "STRUCT(") && strings.HasSuffix(s, ")"):
+		parts := splitTopLevel(s[7 : len(s)-1])
+		t := &colType{fields: make([]*colType, len(parts))}
+		for i, p := range parts {
+			t.fields[i] = parseColType(stripFieldName(p))
+		}
+		return t
+	}
+	switch s {
+	case "DATE":
+		return &colType{face: faceDate}
+	case "TIME", "TIME_NS":
+		return &colType{face: faceTime}
+	case "TIMESTAMP", "TIMESTAMP_S", "TIMESTAMP_MS", "TIMESTAMP_NS":
+		return &colType{face: faceTimestamp}
+	case "TIMESTAMP WITH TIME ZONE":
+		return &colType{face: faceTimestampTZ}
+	case "FLOAT":
+		return &colType{face: faceFloat32}
+	}
+	return &colType{}
+}
+
+// parseColTypes parses every column's DatabaseTypeName; a nil/short slice is
+// returned as all-nil entries so callers can index unconditionally.
+func parseColTypes(cts []*sql.ColumnType, ncols int) []*colType {
+	types := make([]*colType, ncols)
+	for i, ct := range cts {
+		if i >= ncols {
+			break
+		}
+		types[i] = parseColType(ct.DatabaseTypeName())
+	}
+	return types
+}
+
+func allDigits(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// splitTopLevel splits a type-argument list on commas at nesting depth 0,
+// tracking ()/[] depth and double-quoted identifiers ("" doubling).
+func splitTopLevel(s string) []string {
+	var parts []string
+	depth, start := 0, 0
+	inQuote := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if inQuote {
+			if c == '"' {
+				if i+1 < len(s) && s[i+1] == '"' {
+					i++
+				} else {
+					inQuote = false
+				}
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inQuote = true
+		case '(', '[':
+			depth++
+		case ')', ']':
+			depth--
+		case ',':
+			if depth == 0 {
+				parts = append(parts, strings.TrimSpace(s[start:i]))
+				start = i + 1
+			}
+		}
+	}
+	return append(parts, strings.TrimSpace(s[start:]))
+}
+
+// stripFieldName drops the leading double-quoted field name (driver typename.go
+// quotes unconditionally) from one STRUCT field entry, returning the type part.
+func stripFieldName(p string) string {
+	if len(p) == 0 || p[0] != '"' {
+		if sp := strings.IndexByte(p, ' '); sp >= 0 { // defensive: unquoted name
+			return p[sp+1:]
+		}
+		return p
+	}
+	for i := 1; i < len(p); i++ {
+		if p[i] == '"' {
+			if i+1 < len(p) && p[i+1] == '"' {
+				i++
+				continue
+			}
+			return strings.TrimSpace(p[i+1:])
+		}
+	}
+	return ""
+}
+
 // ---------------------------------------------------------------- value conversion + comparison
 
 // valueToString mirrors SQLLogicTestConvertValue (result_helper.cpp): NULL,
-// (empty), \0 escaping; everything else like DuckDB's VARCHAR cast.
-func valueToString(v any) string {
+// (empty), \0 escaping; everything else like DuckDB's VARCHAR cast. t is the
+// column's parsed type (nil = unknown: temporal faces fall back to heuristics)
+// and tz the tracked session TimeZone for TIMESTAMPTZ rendering.
+func valueToString(v any, t *colType, tz *time.Location) string {
 	switch x := v.(type) {
 	case nil:
 		return "NULL"
@@ -1545,7 +1736,7 @@ func valueToString(v any) string {
 	case int64:
 		return strconv.FormatInt(x, 10)
 	case float64:
-		return formatFloat(x)
+		return formatFloatFace(x, t)
 	case string:
 		if x == "" {
 			return "(empty)"
@@ -1560,34 +1751,70 @@ func valueToString(v any) string {
 		}
 		return blobToString(x)
 	case time.Time:
-		return formatTimeValue(x)
+		return formatTemporal(x, t, tz)
 	case *big.Int:
 		return x.String()
+	case []any, duckdb.Struct, duckdb.MapValue, map[string]any:
+		// The framework's \0 sanitization applies to the final converted
+		// string, AFTER container quoting/escaping (a NUL is not a quote
+		// trigger natively, so escaping never sees the substitute text).
+		return strings.ReplaceAll(containerToString(v, t, tz), "\x00", "\\0")
+	default:
+		return fmt.Sprint(x)
+	}
+}
+
+// containerToString renders a LIST/ARRAY ([]any), STRUCT or MAP cell the way
+// DuckDB's nested-to-VARCHAR casts do (list_casts.cpp / struct_cast.cpp /
+// map_cast.cpp): children that are themselves nested render raw; scalar
+// children render via their VARCHAR cast and are then quoted/escaped per
+// NestedToVarcharCast's lookup table (see quoteNested).
+func containerToString(v any, t *colType, tz *time.Location) string {
+	switch x := v.(type) {
 	case []any:
-		// DuckDB list rendering: [a, b, NULL]
 		parts := make([]string, len(x))
 		for i, e := range x {
-			parts[i] = nestedToString(e)
+			if jv, ok := e.(duckdb.JSONValue); ok {
+				// LIST(JSON) -> VARCHAR is the json extension's special cast
+				// (CastJSONListToVarchar): children render RAW (no quoting).
+				// JSON children of STRUCT/MAP go through the generic quoted
+				// path instead (only the list cast is specialized).
+				parts[i] = string(jv)
+				continue
+			}
+			parts[i] = nestedToString(e, t.elemType(), tz)
 		}
 		return "[" + strings.Join(parts, ", ") + "]"
 	case duckdb.Struct:
-		// STRUCT: DuckDB renders {'a': 1, 'b': x} in DECLARED field order; the
-		// driver's Struct carrier preserves it.
+		// Unnamed structs (all field names empty) render as (v1, v2); named
+		// ones as {'name': v, ...} with ALWAYS-quoted, backslash-escaped keys
+		// (CalculateEscapedStringLength<STRUCT_KEY=true>).
+		unnamed := len(x.Names) > 0
+		for _, n := range x.Names {
+			if n != "" {
+				unnamed = false
+				break
+			}
+		}
 		parts := make([]string, len(x.Names))
-		for i, k := range x.Names {
-			parts[i] = "'" + k + "': " + nestedToString(x.Values[i])
+		for i := range x.Names {
+			parts[i] = nestedToString(x.Values[i], t.fieldType(i), tz)
+			if !unnamed {
+				parts[i] = escapeNestedQuoted(x.Names[i]) + ": " + parts[i]
+			}
+		}
+		if unnamed {
+			return "(" + strings.Join(parts, ", ") + ")"
 		}
 		return "{" + strings.Join(parts, ", ") + "}"
 	case duckdb.MapValue:
-		// MAP: DuckDB renders {key=value, ...} in entry order; the driver's
-		// MapValue carrier preserves it (and admits unhashable LIST/STRUCT keys).
 		parts := make([]string, len(x.Keys))
 		for i, k := range x.Keys {
-			parts[i] = nestedToString(k) + "=" + nestedToString(x.Values[i])
+			parts[i] = nestedToString(k, t.keyType(), tz) + "=" + nestedToString(x.Values[i], t.valType(), tz)
 		}
 		return "{" + strings.Join(parts, ", ") + "}"
 	case map[string]any:
-		// Parsed JSON object (JSON result columns decode natively; STRUCTs now
+		// Parsed JSON object (JSON result columns decode natively; STRUCTs
 		// arrive as duckdb.Struct, not maps). Key order is JSON-object
 		// arbitrary; sort for a stable rendering — JSON expected tokens are
 		// compared structurally (jsonEquivalent), not via this string.
@@ -1598,35 +1825,137 @@ func valueToString(v any) string {
 		sort.Strings(keys)
 		parts := make([]string, len(keys))
 		for i, k := range keys {
-			parts[i] = "'" + k + "': " + nestedToString(x[k])
+			parts[i] = "'" + k + "': " + nestedToString(x[k], nil, tz)
 		}
 		return "{" + strings.Join(parts, ", ") + "}"
-	default:
-		return fmt.Sprint(x)
 	}
+	return fmt.Sprint(v)
 }
 
-// nestedToString renders a value inside a list/struct (no "(empty)"
-// placeholder; strings are single-quoted when they need it, like DuckDB).
-func nestedToString(v any) string {
+// nestedToString renders one child value inside a LIST/STRUCT/MAP: nested
+// children recurse unquoted, scalar children render via their VARCHAR cast and
+// then pass through DuckDB's quote-if-needed rule.
+func nestedToString(v any, t *colType, tz *time.Location) string {
 	switch x := v.(type) {
 	case nil:
 		return "NULL"
+	case []any, duckdb.Struct, duckdb.MapValue, map[string]any:
+		return containerToString(v, t, tz)
+	case bool:
+		if x {
+			return "true"
+		}
+		return "false"
+	case int64:
+		return strconv.FormatInt(x, 10)
+	case float64:
+		return formatFloatFace(x, t) // never contains quote triggers
 	case string:
-		if x == "" {
-			return "''"
-		}
-		if strings.ContainsAny(x, ",[]{}'\"") ||
-			strings.TrimSpace(x) != x || strings.EqualFold(x, "null") {
-			return "'" + strings.ReplaceAll(x, "'", "''") + "'"
-		}
-		return x
+		return quoteNested(x)
+	case duckdb.JSONValue:
+		return quoteNested(string(x))
+	case []byte:
+		return quoteNested(blobToString(x))
+	case time.Time:
+		return quoteNested(formatTemporal(x, t, tz))
 	default:
-		return valueToString(v)
+		// Interval, Decimal, *big.Int, ... — fmt.Stringer/VARCHAR-cast forms,
+		// quote-checked like any scalar ('00:00:01.5' has a ':').
+		return quoteNested(fmt.Sprint(x))
 	}
 }
 
-func formatFloat(f float64) string {
+// quoteNested applies NestedToVarcharCast's child-quoting rule
+// (vector_cast_helpers.hpp CalculateEscapedStringLength/WriteEscapedString):
+// quote when the string is empty, leads (or, at length >= 2, trails) with
+// whitespace, equals "null" case-insensitively, or contains any character in
+// the lookup table — " ' ( ) , : = [ ] { } . Quoting backslash-escapes ' and \.
+func quoteNested(s string) string {
+	if !nestedNeedsQuotes(s) {
+		return s
+	}
+	return escapeNestedQuoted(s)
+}
+
+func nestedNeedsQuotes(s string) bool {
+	if s == "" {
+		return true
+	}
+	if isSpaceByte(s[0]) || (len(s) >= 2 && isSpaceByte(s[len(s)-1])) {
+		return true
+	}
+	if strings.EqualFold(s, "null") {
+		return true
+	}
+	return strings.ContainsAny(s, "\"'(),:=[]{}")
+}
+
+func isSpaceByte(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
+
+// escapeNestedQuoted single-quotes s, backslash-escaping embedded ' and \
+// (WriteEscapedString writes \' and \\, NOT SQL '' doubling).
+func escapeNestedQuoted(s string) string {
+	var sb strings.Builder
+	sb.WriteByte('\'')
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '\'' || c == '\\' {
+			sb.WriteByte('\\')
+		}
+		sb.WriteByte(c)
+	}
+	sb.WriteByte('\'')
+	return sb.String()
+}
+
+// formatTemporal renders a time.Time per the position's temporal face:
+// DATE bare, TIME as time-of-day, TIMESTAMP always with a time part (DuckDB
+// prints midnight timestamps as "... 00:00:00"), TIMESTAMPTZ in the session
+// zone with DuckDB's offset suffix. Unknown face falls back to the legacy
+// midnight-is-a-date heuristic (formatTimeValue).
+func formatTemporal(x time.Time, t *colType, tz *time.Location) string {
+	face := faceNone
+	if t != nil {
+		face = t.face
+	}
+	switch face {
+	case faceDate:
+		if s := specialDate(x); s != "" {
+			return s
+		}
+		return formatYMD(x)
+	case faceTime:
+		return timeOfDayString(x)
+	case faceTimestamp:
+		return formatYMD(x) + " " + x.Format("15:04:05") + fracStr(x)
+	case faceTimestampTZ:
+		if tz == nil {
+			tz = time.UTC
+		}
+		lx := x.In(tz)
+		return formatYMD(lx) + " " + lx.Format("15:04:05") + fracStr(lx) + offsetSuffix(lx)
+	}
+	return formatTimeValue(x)
+}
+
+func formatFloat(f float64) string { return formatFloatBits(f, 64) }
+
+// formatFloatFace renders a float64 cell honoring the column face: FLOAT
+// columns decode widened to float64, so shortest-roundtrip rendering must go
+// back through float32 to match DuckDB (-3.4e+38, not -3.3999999521443642e+38).
+func formatFloatFace(f float64, t *colType) string {
+	if t != nil && t.face == faceFloat32 {
+		return formatFloatBits(f, 32)
+	}
+	return formatFloatBits(f, 64)
+}
+
+// formatFloatBits mirrors DuckDB's float/double -> VARCHAR cast, which is
+// duckdb_fmt::format("{}", v) (string_cast.cpp): shortest-roundtrip digits,
+// FIXED notation iff -4 <= floor(log10|v|) < 16, scientific otherwise
+// (float_writer's general-format rule, fmt format.h), integral values with a
+// trailing ".0". Go's shortest 'g' would switch to scientific at e+06.
+func formatFloatBits(f float64, bits int) string {
 	switch {
 	case math.IsNaN(f):
 		return "nan"
@@ -1635,12 +1964,21 @@ func formatFloat(f float64) string {
 	case math.IsInf(f, -1):
 		return "-inf"
 	}
-	s := strconv.FormatFloat(f, 'g', -1, 64)
-	// DuckDB renders integral doubles as "1.0", Go gives "1"
-	if !strings.ContainsAny(s, ".eE") {
-		s += ".0"
+	if bits == 32 {
+		f = float64(float32(f))
 	}
-	return s
+	e := strconv.FormatFloat(f, 'e', -1, bits) // shortest digits, exponent form
+	d, _ := strconv.Atoi(e[strings.IndexByte(e, 'e')+1:])
+	if d >= -4 && d < 16 {
+		s := strconv.FormatFloat(f, 'f', -1, bits)
+		if !strings.ContainsRune(s, '.') {
+			s += ".0" // DuckDB renders integral doubles as "1.0", Go gives "1"
+		}
+		return s
+	}
+	// Scientific: Go's 'e' shortest form matches fmt (no decimal point for a
+	// single digit, sign + >=2 exponent digits).
+	return e
 }
 
 // blobToString mirrors Blob::ToString (duckdb-src/src/common/types/blob.cpp):
@@ -1691,31 +2029,30 @@ func formatYMD(t time.Time) string {
 }
 
 // offsetSuffix renders the zone offset the way DuckDB casts TIMESTAMPTZ to
-// VARCHAR: ±HH, with :MM only when non-zero minutes, :SS only when non-zero
-// seconds (e.g. "+00", "-08", "+05:30", "+00:50:20").
+// VARCHAR (Time::ToUTCOffset via the ICU cast): the offset is truncated to
+// whole MINUTES (toward zero — LMT zones like early America/Los_Angeles carry
+// seconds, which native drops), rendered ±HH with :MM only when non-zero
+// (e.g. "+00", "-08", "+05:30", "-07:52").
 func offsetSuffix(t time.Time) string {
 	_, off := t.Zone()
+	mins := off / 60 // truncation toward zero matches C++ integer division
 	sign := "+"
-	if off < 0 {
+	if mins < 0 {
 		sign = "-"
-		off = -off
+		mins = -mins
 	}
-	h, rem := off/3600, off%3600
-	m, s := rem/60, rem%60
+	h, m := mins/60, mins%60
 	out := fmt.Sprintf("%s%02d", sign, h)
-	if m != 0 || s != 0 {
+	if m != 0 {
 		out += fmt.Sprintf(":%02d", m)
-	}
-	if s != 0 {
-		out += fmt.Sprintf(":%02d", s)
 	}
 	return out
 }
 
 // formatTimeValue renders a time.Time the way DuckDB casts DATE/TIMESTAMP to
-// VARCHAR. The driver gives us no column type, so midnight values render as a
-// bare date (matches DATE; a midnight TIMESTAMP renders differently in DuckDB
-// — the comparator compensates).
+// VARCHAR when the column's face is UNKNOWN (no type metadata, e.g. under a
+// UNION): midnight values render as a bare date (matches DATE; a midnight
+// TIMESTAMP renders differently in DuckDB — the comparator compensates).
 func formatTimeValue(t time.Time) string {
 	if s := specialDate(t); s != "" {
 		return s
@@ -1723,16 +2060,30 @@ func formatTimeValue(t time.Time) string {
 	if t.Hour() == 0 && t.Minute() == 0 && t.Second() == 0 && t.Nanosecond() == 0 {
 		return formatYMD(t)
 	}
-	return formatYMD(t) + " " + t.Format("15:04:05") + fracMicros(t)
+	return formatYMD(t) + " " + t.Format("15:04:05") + fracStr(t)
 }
 
-func fracMicros(t time.Time) string {
-	us := t.Nanosecond() / 1000
-	if us == 0 {
+// timeOfDayString renders a TIME cell. The driver decodes TIME as an offset
+// from the 1970-01-01 epoch, so the legal extreme TIME '24:00:00' lands on
+// 1970-01-02 and would render "00:00:00" through Format; computing hours from
+// the epoch offset keeps DuckDB's "24:00:00".
+func timeOfDayString(x time.Time) string {
+	if ns := x.UnixNano(); ns >= 0 && ns <= 24*3600*1e9 {
+		secs := ns / 1e9
+		return fmt.Sprintf("%02d:%02d:%02d", secs/3600, secs/60%60, secs%60) + fracStr(x)
+	}
+	return x.Format("15:04:05") + fracStr(x)
+}
+
+// fracStr renders the fractional-seconds suffix, trailing-zero trimmed at full
+// nanosecond width (micro-precision values print identically to a 6-digit
+// render; TIMESTAMP_NS/TIME_NS keep their sub-microsecond digits).
+func fracStr(t time.Time) string {
+	ns := t.Nanosecond()
+	if ns == 0 {
 		return ""
 	}
-	s := fmt.Sprintf(".%06d", us)
-	return strings.TrimRight(s, "0")
+	return strings.TrimRight(fmt.Sprintf(".%09d", ns), "0")
 }
 
 // compareValue checks a single actual value against one expected token,
@@ -1806,18 +2157,18 @@ func compareValue(actual any, actualStr, expected string, tz *time.Location) boo
 		if s := specialDate(x); s != "" {
 			return s == expTrim
 		}
-		ts := formatYMD(x) + " " + x.Format("15:04:05") + fracMicros(x)
+		ts := formatYMD(x) + " " + x.Format("15:04:05") + fracStr(x)
 		cands := []string{
 			formatYMD(x),
 			ts,
 			ts + "+00",
-			x.Format("15:04:05") + fracMicros(x),
+			timeOfDayString(x),
 		}
 		if tz != nil {
 			// TIMESTAMPTZ rendering in the session TimeZone (driver gives the
 			// UTC instant; DuckDB renders in the session zone with offset)
 			lx := x.In(tz)
-			lts := formatYMD(lx) + " " + lx.Format("15:04:05") + fracMicros(lx) + offsetSuffix(lx)
+			lts := formatYMD(lx) + " " + lx.Format("15:04:05") + fracStr(lx) + offsetSuffix(lx)
 			cands = append(cands, lts)
 		}
 		for _, c := range cands {

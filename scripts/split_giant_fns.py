@@ -43,6 +43,8 @@ Rewrites FILE in place. Exit 1 if an oversized function could not be split.
 import re
 import sys
 
+sys.setrecursionlimit(200000)  # transpiled nesting reaches >1000 blocks (shard25)
+
 THRESHOLD = 25000   # only split functions over this many body lines
 MAX_PART = 11000    # target max lines per part function
 
@@ -56,12 +58,13 @@ RE_RETURN = re.compile(r'^return\b\s*(.*)$')
 
 
 class Node:
-    __slots__ = ('kind', 'cond', 'children', 'lines')
+    __slots__ = ('kind', 'cond', 'children', 'orelse', 'lines')
 
-    def __init__(self, kind, cond=None, children=None, lines=None):
+    def __init__(self, kind, cond=None, children=None, orelse=None, lines=None):
         self.kind = kind          # 'bare' | 'if' | 'leaf'
         self.cond = cond          # if-condition text for 'if'
         self.children = children  # for 'bare'/'if'
+        self.orelse = orelse      # else-branch children for 'if' (or None)
         self.lines = lines        # raw stripped lines for 'leaf' (switch/stmt)
 
 
@@ -70,21 +73,31 @@ class GrammarError(Exception):
 
 
 def parse_block(lines, i):
-    """Parse statements until the closing '}' at this level. Returns (children, next_i)."""
+    """Parse statements until the closing '}' at this level.
+    Returns (children, next_i, had_else) — had_else when terminated by '} else {'."""
     children = []
     n = len(lines)
     while i < n:
         l = lines[i].strip()
         if l == '}':
-            return children, i + 1
+            return children, i + 1, False
+        if l == '} else {':
+            return children, i + 1, True
         if l == '{':
-            ch, i = parse_block(lines, i + 1)
+            ch, i, he = parse_block(lines, i + 1)
+            if he:
+                raise GrammarError('else terminating bare block')
             children.append(Node('bare', children=ch))
             continue
         m = RE_IF.match(l)
         if m:
-            ch, i = parse_block(lines, i + 1)
-            children.append(Node('if', cond=m.group(1), children=ch))
+            ch, i, he = parse_block(lines, i + 1)
+            orelse = None
+            if he:
+                orelse, i, he2 = parse_block(lines, i)
+                if he2:
+                    raise GrammarError('else-if chain')
+            children.append(Node('if', cond=m.group(1), children=ch, orelse=orelse))
             continue
         if RE_SWITCH.match(l):
             # atomic: consume to matching brace, keep raw lines
@@ -100,8 +113,6 @@ def parse_block(lines, i):
                 i += 1
             children.append(Node('leaf', lines=raw))
             continue
-        if l.startswith('} else'):
-            raise GrammarError('else branch present')
         if l.count('{') != l.count('}'):
             raise GrammarError('unbalanced braces in statement: %r' % l)
         children.append(Node('leaf', lines=[l]))
@@ -112,7 +123,9 @@ def parse_block(lines, i):
 def has_label(node):
     if node.kind == 'leaf':
         return bool(RE_LABEL.match(node.lines[0]))
-    return any(has_label(c) for c in node.children)
+    if any(has_label(c) for c in node.children):
+        return True
+    return bool(node.kind == 'if' and node.orelse and any(has_label(c) for c in node.orelse))
 
 
 def flatten(children, fresh):
@@ -131,9 +144,19 @@ def flatten(children, fresh):
             if has_label(node):
                 fresh[0] += 1
                 skip = 'xl%d' % fresh[0]
-                out.append(('stmt', ['if !(%s) {' % node.cond, 'goto %s' % skip, '}']))
-                out.extend(flatten(node.children, fresh))
-                out.append(('label', skip))
+                if node.orelse is None:
+                    out.append(('stmt', ['if !(%s) {' % node.cond, 'goto %s' % skip, '}']))
+                    out.extend(flatten(node.children, fresh))
+                    out.append(('label', skip))
+                else:
+                    fresh[0] += 1
+                    end = 'xl%d' % fresh[0]
+                    out.append(('stmt', ['if !(%s) {' % node.cond, 'goto %s' % skip, '}']))
+                    out.extend(flatten(node.children, fresh))
+                    out.append(('stmt', ['goto %s' % end]))
+                    out.append(('label', skip))
+                    out.extend(flatten(node.orelse, fresh))
+                    out.append(('label', end))
             else:
                 out.append(('stmt', render_atomic(node)))
     return out
@@ -150,6 +173,10 @@ def render_atomic(node):
         lines.append('{')
     for c in node.children:
         lines.extend(render_atomic(c))
+    if node.kind == 'if' and node.orelse is not None:
+        lines.append('} else {')
+        for c in node.orelse:
+            lines.extend(render_atomic(c))
     lines.append('}')
     return lines
 
@@ -167,6 +194,8 @@ def collect_vars(children, decls):
             continue
         if node.kind in ('bare', 'if'):
             node.children = collect_vars(node.children, decls)
+            if node.kind == 'if' and node.orelse is not None:
+                node.orelse = collect_vars(node.orelse, decls)
         kept.append(node)
     return kept
 
@@ -175,8 +204,8 @@ def split_function(func_lines, fname, params, rettype):
     """params: [(name,type)] excluding the Module receiver param. Returns new source lines."""
     body = func_lines[1:-1]  # strip 'func ...{' and final '}'
 
-    tree, end = parse_block(body + ['}'], 0)
-    if end != len(body) + 1:
+    tree, end, had_else = parse_block(body + ['}'], 0)
+    if end != len(body) + 1 or had_else:
         raise GrammarError('trailing content after body')
 
     decls = list(params)
@@ -184,17 +213,7 @@ def split_function(func_lines, fname, params, rettype):
     fresh = [0]
     flat = flatten(tree, fresh)
 
-    # ---- hoist declared vars into the locals struct ----
-    names = [n for n, _ in decls]
-    if not names:
-        raise GrammarError('no locals found')
-    hoist_re = re.compile(r'\b(%s)\b' % '|'.join(sorted(names, key=len, reverse=True)))
     voidfn = not rettype
-
-    def rewrite_refs(line):
-        if '"' in line and 'unreachable' not in line and 'panic' not in line:
-            raise GrammarError('string literal in stmt: %r' % line)
-        return hoist_re.sub(lambda m: 'l.' + m.group(1), line)
 
     # ---- segment at labels; ids are textual order ----
     segments = []  # (label_name, [stmt-lines...]) ; entry uses synthetic label
@@ -209,6 +228,69 @@ def split_function(func_lines, fname, params, rettype):
     seg_id = {lab: i for i, (lab, _) in enumerate(segments)}
     if len(seg_id) != len(segments):
         raise GrammarError('duplicate label')
+
+    # A `name := ...` temporary referenced from another segment (each segment
+    # becomes its own block scope) must be hoisted into the locals struct,
+    # which needs its type: infer from the stereotyped RHS shapes (cast
+    # prefix, known var, temp copy chain). Anything else fails loudly.
+    def_seg = {}
+    def_rhs = {}
+    re_def = re.compile(r'^([A-Za-z_]\w*) := (.*)$')
+    re_ident = re.compile(r'(?<![\w.])([A-Za-z_]\w*)\b')
+    for i, (_, stmts) in enumerate(segments):
+        for line in stmts:
+            d = re_def.match(line)
+            if d:
+                def_seg[d.group(1)] = i
+                def_rhs[d.group(1)] = d.group(2)
+    crossing = set()
+    for i, (_, stmts) in enumerate(segments):
+        for line in stmts:
+            rest = line.split(':=', 1)[-1]
+            for ident in re_ident.findall(rest):
+                if ident in def_seg and def_seg[ident] != i:
+                    crossing.add(ident)
+
+    decl_type = dict(decls)
+    CASTS = {'int32(': 'int32', 'uint32(': 'uint32', 'int64(': 'int64',
+             'uint64(': 'uint64', 'float32(': 'float32', 'float64(': 'float64',
+             'I32(': 'int32', 'I64(': 'int64', 'F32(': 'float32', 'F64(': 'float64'}
+
+    def infer_type(name, seen):
+        if name in seen:
+            raise GrammarError('type inference cycle on %s' % name)
+        seen.add(name)
+        rhs = def_rhs.get(name)
+        if rhs is None:
+            raise GrammarError('no RHS for crossing temporary %s' % name)
+        if rhs in decl_type:
+            return decl_type[rhs]
+        if rhs == 'm.G0':
+            return 'int32'
+        for pfx, t in CASTS.items():
+            if rhs.startswith(pfx):
+                return t
+        if re.fullmatch(r'[A-Za-z_]\w*', rhs):
+            return infer_type(rhs, seen)
+        raise GrammarError('cannot infer type of crossing temporary %s := %s' % (name, rhs))
+
+    for name in sorted(crossing):
+        decls.append((name, infer_type(name, set())))
+
+    # ---- hoist declared vars (and crossing temps) into the locals struct ----
+    names = [n for n, _ in decls]
+    if not names:
+        raise GrammarError('no locals found')
+    # (?<![\w.]) keeps m.T0 / m.G0-style Module field accesses out of the match
+    hoist_re = re.compile(r'(?<![\w.])(%s)\b' % '|'.join(sorted(names, key=len, reverse=True)))
+    re_decl_fix = re.compile(r'^(l\.\w+) := ')
+
+    def rewrite_refs(line):
+        if '"' in line and 'unreachable' not in line and 'panic' not in line:
+            raise GrammarError('string literal in stmt: %r' % line)
+        line = hoist_re.sub(lambda m: 'l.' + m.group(1), line)
+        # hoisted temp's definition `l.tN := x` must become plain assignment
+        return re_decl_fix.sub(r'\1 = ', line)
 
     # ---- greedy partition into parts ----
     parts = []  # list of [seg_index...]

@@ -41,6 +41,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime/debug"
 	"sort"
@@ -654,6 +655,7 @@ type execState struct {
 	testDir     string // per-file scratch dir (__TEST_DIR__)
 	testName    string
 	testUUID    string
+	tz          *time.Location // session TimeZone (tracked from successful SET TimeZone)
 
 	recRun        int
 	recPassed     int
@@ -890,20 +892,62 @@ var noCtx = context.Background()
 
 // ---------------------------------------------------------------- statement
 
+// threadsStmtRe matches statements that (re)configure the number of threads.
+// The wasm build is inherently single-threaded ("DuckDB was compiled without
+// threads!"); the upstream C++ harness runs a threaded build where these
+// succeed as plain settings. They have no semantic effect on any result this
+// runner checks, so a `statement ok` thread reconfiguration is treated as a
+// no-op SUCCESS. (`statement error` thread statements still execute: value
+// validation errors fire before the threads check and must be observed.)
+var threadsStmtRe = regexp.MustCompile(`(?is)^\s*(?:pragma\s+(?:threads|worker_threads)\s*(?:=|\()|set\s+(?:session\s+|global\s+|local\s+)?(?:threads|total_threads|worker_threads)\s*(?:=|\s+to\s+))`)
+
+// setTimeZoneRe captures the zone name of a SET TimeZone statement so query
+// comparison can accept TIMESTAMPTZ renderings in the session zone (the driver
+// returns instants; it exposes no column type info to render with).
+var (
+	setTimeZoneRe   = regexp.MustCompile(`(?is)^\s*set\s+(?:session\s+|local\s+|global\s+)?time\s*zone\s*(?:=|to)?\s*'([^']*)'`)
+	resetTimeZoneRe = regexp.MustCompile(`(?is)^\s*reset\s+time\s*zone`)
+)
+
 func (st *execState) execStatement(r *record, subs []sub) error {
 	sqlText := st.substitute(r.sql, subs)
 	conn, err := st.getConn(r.conn)
 	if err != nil {
 		return failStop{"runner: conn", err.Error(), r.line}
 	}
+	if r.expectKind == "ok" && threadsStmtRe.MatchString(sqlText) {
+		return nil // single-threaded build: thread-count changes are no-op successes
+	}
 	// The driver can only prepare one statement at a time
 	// ("Cannot prepare multiple statements at once!"), while the sqllogictest
 	// dialect allows several ;-separated statements per record. Split and run
 	// sequentially; the first error wins (matches the C++ batch semantics).
+	parts := splitStatements(sqlText)
+	if len(parts) == 0 {
+		// comment-only / whitespace-only statement: DuckDB's Query() of such
+		// text succeeds with an empty result, our driver's prepare errors with
+		// "No statement to prepare!". Match the C++ behavior.
+		if r.expectKind == "error" {
+			parts = []string{sqlText}
+		} else {
+			return nil
+		}
+	}
 	var rawErr error
-	for _, part := range splitStatements(sqlText) {
+	for _, part := range parts {
 		if _, rawErr = conn.ExecContext(noCtx, part); rawErr != nil {
 			break
+		}
+	}
+	if rawErr == nil {
+		if m := setTimeZoneRe.FindStringSubmatch(sqlText); m != nil {
+			if loc, lerr := time.LoadLocation(m[1]); lerr == nil {
+				st.tz = loc
+			} else {
+				st.tz = nil
+			}
+		} else if resetTimeZoneRe.MatchString(sqlText) {
+			st.tz = nil
 		}
 	}
 	var errMsg string
@@ -985,36 +1029,41 @@ func extractJSONField(payload, field string) string {
 }
 
 // splitStatements splits a SQL batch on top-level semicolons, respecting
-// single/double quotes, $$ dollar-quoting and -- line comments. Empty
-// segments are dropped.
+// single/double quotes, $$ dollar-quoting and -- line comments.
+//
+// Statement TEXT follows DuckDB's parser (src/parser/parser.cpp): every
+// statement but the last ends just BEFORE its ';'; the LAST statement's text
+// extends verbatim to the end of the batch — including its terminating ';'
+// and any trailing comments (current_query() echoes exactly that text, and
+// the query log records the per-statement slices). Segments with no
+// meaningful content (only whitespace, comments, semicolons) never become
+// statements; trailing ones merge into the last statement's text. May return
+// an EMPTY slice when the whole text is comment/whitespace-only.
 func splitStatements(s string) []string {
-	var out []string
-	depth := 0 // not tracking parens; semicolons can't appear there outside quotes anyway
-	_ = depth
-	var cur strings.Builder
-	i := 0
+	type piece struct {
+		start, end int  // [start,end): segment text excluding the ';'
+		meaningful bool // contains something besides whitespace/comments
+	}
+	var pieces []piece
 	n := len(s)
-	flush := func() {
-		t := strings.TrimSpace(cur.String())
-		if t != "" {
-			out = append(out, t)
-		}
-		cur.Reset()
+	i := 0
+	segStart := 0
+	meaningful := false
+	endPiece := func(end int) {
+		pieces = append(pieces, piece{segStart, end, meaningful})
+		meaningful = false
 	}
 	for i < n {
 		c := s[i]
 		switch c {
 		case '\'', '"':
 			q := c
-			cur.WriteByte(c)
+			meaningful = true
 			i++
 			for i < n {
-				cur.WriteByte(s[i])
 				if s[i] == q {
 					if i+1 < n && s[i+1] == q { // escaped quote
-						i++
-						cur.WriteByte(s[i])
-						i++
+						i += 2
 						continue
 					}
 					i++
@@ -1024,41 +1073,79 @@ func splitStatements(s string) []string {
 			}
 			continue
 		case '-':
-			if i+1 < n && s[i+1] == '-' { // line comment
+			if i+1 < n && s[i+1] == '-' { // line comment (kept in text, not "meaningful")
 				for i < n && s[i] != '\n' {
-					cur.WriteByte(s[i])
 					i++
 				}
 				continue
 			}
 		case '$':
 			if i+1 < n && s[i+1] == '$' { // dollar-quoted block
-				cur.WriteString("$$")
+				meaningful = true
 				i += 2
 				for i < n {
 					if s[i] == '$' && i+1 < n && s[i+1] == '$' {
-						cur.WriteString("$$")
 						i += 2
 						break
 					}
-					cur.WriteByte(s[i])
 					i++
 				}
 				continue
 			}
 		case ';':
-			flush()
+			endPiece(i)
 			i++
+			segStart = i
 			continue
 		}
-		cur.WriteByte(c)
+		if !meaningful && c != ' ' && c != '\t' && c != '\n' && c != '\r' {
+			meaningful = true
+		}
 		i++
 	}
-	flush()
-	if len(out) == 0 {
-		out = []string{s}
+	endPiece(n)
+
+	last := -1 // last meaningful piece: its text runs to the end of s
+	for idx := range pieces {
+		if pieces[idx].meaningful {
+			last = idx
+		}
+	}
+	if last < 0 {
+		return nil
+	}
+	var out []string
+	for _, p := range pieces[:last] {
+		if !p.meaningful {
+			continue
+		}
+		if t := strings.TrimSpace(stripLeadingComments(s[p.start:p.end])); t != "" {
+			out = append(out, t)
+		}
+	}
+	// last statement: verbatim to end of batch (TrimSpace only decides whether
+	// any token survives, e.g. unicode-space-only statements must vanish)
+	if t := stripLeadingComments(s[pieces[last].start:]); strings.TrimSpace(t) != "" {
+		out = append(out, t)
 	}
 	return out
+}
+
+// stripLeadingComments removes leading whitespace and full -- comment lines
+// (DuckDB's statement text starts at the first token; leading comments are
+// not part of it).
+func stripLeadingComments(s string) string {
+	for {
+		t := strings.TrimLeft(s, " \t\n\r")
+		if strings.HasPrefix(t, "--") {
+			if j := strings.IndexByte(t, '\n'); j >= 0 {
+				s = t[j+1:]
+				continue
+			}
+			return ""
+		}
+		return t
+	}
 }
 
 // decodeEngineError renders the driver's error the way DuckDB's own test
@@ -1138,6 +1225,9 @@ func (st *execState) execQuery(r *record, subs []sub) error {
 	}
 	// run any leading ;-separated statements, then query the last segment
 	segs := splitStatements(sqlText)
+	if len(segs) == 0 {
+		segs = []string{sqlText}
+	}
 	for _, pre := range segs[:len(segs)-1] {
 		if _, err := conn.ExecContext(noCtx, pre); err != nil {
 			msg := decodeEngineError(err.Error())
@@ -1169,8 +1259,11 @@ func (st *execState) execQuery(r *record, subs []sub) error {
 			return failStop{failScan, snip(sqlText) + "\n=> " + err.Error(), r.line}
 		}
 		for i := range vals {
-			if b, ok := vals[i].([]byte); ok { // defensive copy
-				vals[i] = string(append([]byte(nil), b...))
+			if b, ok := vals[i].([]byte); ok { // defensive copy (driver reuses buffers)
+				// kept as []byte: the driver delivers BLOB cells (and only those)
+				// as []byte; VARCHAR arrives as string. The []byte type is the
+				// only BLOB marker we have (no column type metadata).
+				vals[i] = append([]byte(nil), b...)
 			}
 		}
 		resultVals = append(resultVals, vals...)
@@ -1195,11 +1288,13 @@ func (st *execState) execQuery(r *record, subs []sub) error {
 		expLines[i] = st.substitute(l, subs)
 	}
 
-	expectedColumnCount := len(r.typeChars)
-	if ncols != expectedColumnCount {
-		return failStop{failWrongCols,
-			fmt.Sprintf("%s\nexpected %d columns, got %d", snip(sqlText), expectedColumnCount, ncols), r.line}
-	}
+	// NOTE on column counts: like the C++ runner (result_helper.cpp), the
+	// declared query width (len(typeChars)) is NOT enforced for hash/label
+	// comparisons at all (the hash flattens values, e.g. `query I nosort lbl`
+	// over a 2-column SELECT is legal and common in the corpus). For value
+	// comparisons the ACTUAL column count drives the comparison; a declared
+	// width that differs only fails after the values were checked
+	// (ColumnCountMismatchCorrectResult).
 
 	// hash-based comparison?
 	resultIsHash := len(expLines) == 1 && hashRe.MatchString(expLines[0])
@@ -1271,12 +1366,19 @@ func (st *execState) execQuery(r *record, subs []sub) error {
 		if i >= len(sortedVals) {
 			break
 		}
-		if !compareValue(sortedVals[i], actStrs[i], expValues[i]) {
+		if !compareValue(sortedVals[i], actStrs[i], expValues[i], st.tz) {
 			row, col := i/ncols, i%ncols
 			return failStop{failWrongResult,
 				fmt.Sprintf("%s\nmismatch row %d col %d: %s <> %s",
 					snip(sqlText), row+1, col+1, snip(actStrs[i]), snip(expValues[i])), r.line}
 		}
+	}
+	if len(r.typeChars) != ncols {
+		// values matched, declared width differs: C++ still fails the record
+		// (ColumnCountMismatchCorrectResult)
+		return failStop{failWrongCols,
+			fmt.Sprintf("%s\nvalues match but query declares %d columns, result has %d",
+				snip(sqlText), len(r.typeChars), ncols), r.line}
 	}
 	return nil
 }
@@ -1414,10 +1516,13 @@ func valueToString(v any) string {
 		}
 		return strings.ReplaceAll(x, "\x00", "\\0")
 	case []byte:
+		// BLOB: rendered like DuckDB's BLOB->VARCHAR cast (Blob::ToString,
+		// src/common/types/blob.cpp): printable ASCII except \ ' " stays,
+		// everything else becomes \xNN (uppercase hex).
 		if len(x) == 0 {
 			return "(empty)"
 		}
-		return strings.ReplaceAll(string(x), "\x00", "\\0")
+		return blobToString(x)
 	case time.Time:
 		return formatTimeValue(x)
 	case *big.Int:
@@ -1440,6 +1545,34 @@ func valueToString(v any) string {
 		parts := make([]string, len(keys))
 		for i, k := range keys {
 			parts[i] = "'" + k + "': " + nestedToString(x[k])
+		}
+		return "{" + strings.Join(parts, ", ") + "}"
+	case map[any]any:
+		// MAP: DuckDB renders {key=value, ...} in insertion order; the Go map
+		// loses that order, so keys are sorted (numeric-aware) — maps whose
+		// corpus order isn't sorted may still mismatch (driver limitation).
+		keys := make([]string, 0, len(x))
+		byKey := make(map[string]any, len(x))
+		for k, v := range x {
+			ks := nestedToString(k)
+			keys = append(keys, ks)
+			byKey[ks] = v
+		}
+		sort.Slice(keys, func(a, b int) bool {
+			ra, oka := new(big.Rat).SetString(keys[a])
+			rb, okb := new(big.Rat).SetString(keys[b])
+			switch {
+			case oka && okb:
+				return ra.Cmp(rb) < 0
+			case oka != okb:
+				return oka // numeric keys before non-numeric (histogram catch-all bucket is last)
+			default:
+				return keys[a] < keys[b]
+			}
+		})
+		parts := make([]string, len(keys))
+		for i, k := range keys {
+			parts[i] = k + "=" + nestedToString(byKey[k])
 		}
 		return "{" + strings.Join(parts, ", ") + "}"
 	default:
@@ -1484,15 +1617,87 @@ func formatFloat(f float64) string {
 	return s
 }
 
+// blobToString mirrors Blob::ToString (duckdb-src/src/common/types/blob.cpp):
+// bytes 32..126 except backslash, single and double quote render as-is, all
+// other bytes as \xNN with uppercase hex.
+func blobToString(b []byte) string {
+	const hexTable = "0123456789ABCDEF"
+	var sb strings.Builder
+	for _, c := range b {
+		if c >= 32 && c <= 126 && c != '\\' && c != '\'' && c != '"' {
+			sb.WriteByte(c)
+		} else {
+			sb.WriteByte('\\')
+			sb.WriteByte('x')
+			sb.WriteByte(hexTable[c>>4])
+			sb.WriteByte(hexTable[c&0x0F])
+		}
+	}
+	return sb.String()
+}
+
+// specialDate detects the engine's DATE ±infinity sentinels as delivered by
+// the driver (date::infinity = 5881580-07-11, date::ninfinity = -5877641-06-24
+// in Go's astronomical years; both outside the valid finite DATE range).
+// DuckDB renders these as "infinity"/"-infinity".
+func specialDate(t time.Time) string {
+	if t.Hour() != 0 || t.Minute() != 0 || t.Second() != 0 || t.Nanosecond() != 0 {
+		return ""
+	}
+	y, m, d := t.Date()
+	if y == 5881580 && m == time.July && d == 11 {
+		return "infinity"
+	}
+	if y == -5877641 && m == time.June && d == 24 {
+		return "-infinity"
+	}
+	return ""
+}
+
+// formatYMD renders the date part like DuckDB's DATE->VARCHAR cast, including
+// the " (BC)" suffix for non-positive (astronomical) years.
+func formatYMD(t time.Time) string {
+	y, m, d := t.Date()
+	if y <= 0 {
+		return fmt.Sprintf("%04d-%02d-%02d (BC)", 1-y, int(m), d)
+	}
+	return fmt.Sprintf("%04d-%02d-%02d", y, int(m), d)
+}
+
+// offsetSuffix renders the zone offset the way DuckDB casts TIMESTAMPTZ to
+// VARCHAR: ±HH, with :MM only when non-zero minutes, :SS only when non-zero
+// seconds (e.g. "+00", "-08", "+05:30", "+00:50:20").
+func offsetSuffix(t time.Time) string {
+	_, off := t.Zone()
+	sign := "+"
+	if off < 0 {
+		sign = "-"
+		off = -off
+	}
+	h, rem := off/3600, off%3600
+	m, s := rem/60, rem%60
+	out := fmt.Sprintf("%s%02d", sign, h)
+	if m != 0 || s != 0 {
+		out += fmt.Sprintf(":%02d", m)
+	}
+	if s != 0 {
+		out += fmt.Sprintf(":%02d", s)
+	}
+	return out
+}
+
 // formatTimeValue renders a time.Time the way DuckDB casts DATE/TIMESTAMP to
 // VARCHAR. The driver gives us no column type, so midnight values render as a
 // bare date (matches DATE; a midnight TIMESTAMP renders differently in DuckDB
 // — the comparator compensates).
 func formatTimeValue(t time.Time) string {
-	if t.Hour() == 0 && t.Minute() == 0 && t.Second() == 0 && t.Nanosecond() == 0 {
-		return t.Format("2006-01-02")
+	if s := specialDate(t); s != "" {
+		return s
 	}
-	return t.Format("2006-01-02 15:04:05") + fracMicros(t)
+	if t.Hour() == 0 && t.Minute() == 0 && t.Second() == 0 && t.Nanosecond() == 0 {
+		return formatYMD(t)
+	}
+	return formatYMD(t) + " " + t.Format("15:04:05") + fracMicros(t)
 }
 
 func fracMicros(t time.Time) string {
@@ -1505,8 +1710,11 @@ func fracMicros(t time.Time) string {
 }
 
 // compareValue checks a single actual value against one expected token,
-// mirroring TestResultHelper::CompareValues.
-func compareValue(actual any, actualStr, expected string) bool {
+// mirroring TestResultHelper::CompareValues. tz is the tracked session
+// TimeZone (nil = none): TIMESTAMPTZ values arrive from the driver as bare
+// UTC instants with no type marker, so the comparator additionally accepts
+// the rendering in the session zone with DuckDB's offset suffix.
+func compareValue(actual any, actualStr, expected string, tz *time.Location) bool {
 	if actualStr == expected {
 		return true
 	}
@@ -1518,7 +1726,10 @@ func compareValue(actual any, actualStr, expected string) bool {
 	expTrim := strings.TrimSpace(expected)
 	switch x := actual.(type) {
 	case nil:
-		return expTrim == "NULL"
+		// "null" (lowercase) is accepted because the driver parses JSON cells
+		// natively: a JSON null arrives as Go nil while the corpus expects the
+		// raw JSON text "null" (no column type metadata to tell JSON apart).
+		return expTrim == "NULL" || expTrim == "null"
 	case bool:
 		e := strings.ToLower(expTrim)
 		if x {
@@ -1555,12 +1766,22 @@ func compareValue(actual any, actualStr, expected string) bool {
 		return false
 	case time.Time:
 		// accept date / timestamp / timestamptz / time renderings
-		ts := x.Format("2006-01-02 15:04:05") + fracMicros(x)
+		if s := specialDate(x); s != "" {
+			return s == expTrim
+		}
+		ts := formatYMD(x) + " " + x.Format("15:04:05") + fracMicros(x)
 		cands := []string{
-			x.Format("2006-01-02"),
+			formatYMD(x),
 			ts,
 			ts + "+00",
 			x.Format("15:04:05") + fracMicros(x),
+		}
+		if tz != nil {
+			// TIMESTAMPTZ rendering in the session TimeZone (driver gives the
+			// UTC instant; DuckDB renders in the session zone with offset)
+			lx := x.In(tz)
+			lts := formatYMD(lx) + " " + lx.Format("15:04:05") + fracMicros(lx) + offsetSuffix(lx)
+			cands = append(cands, lts)
 		}
 		for _, c := range cands {
 			if c == expTrim {
@@ -1581,7 +1802,38 @@ func compareValue(actual any, actualStr, expected string) bool {
 			return ar.Cmp(er) == 0
 		}
 	}
+	// JSON columns: the driver delivers parsed native values (maps/slices,
+	// unquoted strings) while the corpus expects the raw JSON text. The driver
+	// exposes no column type metadata, so when the expected token itself is
+	// JSON, compare structurally.
+	if len(expTrim) > 0 && (expTrim[0] == '{' || expTrim[0] == '[' || expTrim[0] == '"') {
+		switch actual.(type) {
+		case string, map[string]any, []any:
+			if jsonEquivalent(actual, expTrim) {
+				return true
+			}
+		}
+	}
 	return false
+}
+
+// jsonEquivalent reports whether the expected token, parsed as JSON, is
+// structurally equal to the actual driver value (both normalized through
+// encoding/json so numeric types and key order are canonical).
+func jsonEquivalent(actual any, expected string) bool {
+	var expVal any
+	if err := json.Unmarshal([]byte(expected), &expVal); err != nil {
+		return false
+	}
+	actBytes, err := json.Marshal(actual)
+	if err != nil {
+		return false
+	}
+	var actVal any
+	if err := json.Unmarshal(actBytes, &actVal); err != nil {
+		return false
+	}
+	return reflect.DeepEqual(actVal, expVal)
 }
 
 // approxEqual is DuckDB's ApproxEqual for doubles (src/common/types.cpp).

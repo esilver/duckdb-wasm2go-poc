@@ -82,14 +82,20 @@ type rows struct {
 	// decimalMeta[col] is set for DECIMAL columns: width/scale + the internal
 	// storage type id used to read the raw integer.
 	decimalMeta map[int]decimalInfo
+	// enumMeta[col] is set for ENUM columns: the unsigned integer type backing
+	// the per-row dictionary INDEXES plus the dictionary strings themselves
+	// (snapshotted once from the column's logical type — immutable for the
+	// result's lifetime). ENUM vectors do NOT hold string_t cells.
+	enumMeta map[int]enumInfo
 
 	chunk    int32 // current duckdb_data_chunk handle (0 = none held)
 	chunkLen int   // rows in the current chunk
 	cursor   int   // next row index within the current chunk
-	// listDecs lazily caches a vecDecoder per LIST column for the CURRENT chunk
-	// (LIST cells need the vector handle to reach the shared child vector, which
-	// the flat decode path doesn't carry). Reset whenever the chunk is released.
-	listDecs map[int]*vecDecoder
+	// nestedDecs lazily caches a vecDecoder per nested-typed (LIST/STRUCT/MAP)
+	// column for the CURRENT chunk (nested cells need the vector handle to reach
+	// child vectors, which the flat decode path doesn't carry). Reset whenever
+	// the chunk is released.
+	nestedDecs map[int]*vecDecoder
 
 	closed bool
 }
@@ -98,6 +104,51 @@ type decimalInfo struct {
 	width    uint8
 	scale    uint8
 	internal int32 // duckdb_type id of the backing integer (SMALLINT/INTEGER/BIGINT/HUGEINT)
+}
+
+// enumInfo is the decode metadata for one ENUM column: the duckdb_type id of
+// the unsigned integer holding each row's dictionary index (UTINYINT for <=255
+// entries, USMALLINT for <=65535, UINTEGER beyond), and the dictionary values.
+type enumInfo struct {
+	internal int32 // dtUtinyint / dtUsmallint / dtUinteger
+	dict     []string
+}
+
+// readEnumMeta snapshots an ENUM logical type's decode metadata. Dictionary
+// value strings are malloc'd by the engine and must be freed with duckdb_free.
+func readEnumMeta(mod *module, lt int32) enumInfo {
+	info := enumInfo{internal: mod.m.Xduckdb_enum_internal_type(lt)}
+	n := int(uint32(mod.m.Xduckdb_enum_dictionary_size(lt)))
+	info.dict = make([]string, n)
+	for i := 0; i < n; i++ {
+		sp := mod.m.Xduckdb_enum_dictionary_value(lt, int64(i))
+		if sp != 0 {
+			info.dict[i] = mod.goString(sp)
+			mod.m.Xduckdb_free(sp)
+		}
+	}
+	return info
+}
+
+// value reads the row'th dictionary index out of an ENUM vector's flat data
+// buffer (stride = the backing unsigned integer's width) and returns the
+// dictionary string. Out-of-range indexes / unknown backing types yield nil.
+func (info enumInfo) value(mod *module, dataPtr int32, row int) driver.Value {
+	var idx int
+	switch info.internal {
+	case dtUtinyint:
+		idx = int(mod.mem()[dataPtr+int32(row)])
+	case dtUsmallint:
+		idx = int(uint16(mod.readU32(dataPtr + int32(row*2))))
+	case dtUinteger:
+		idx = int(mod.readU32(dataPtr + int32(row*4)))
+	default:
+		return nil
+	}
+	if idx < 0 || idx >= len(info.dict) {
+		return nil
+	}
+	return info.dict[idx]
 }
 
 // newRows reads the result's column metadata and returns a streaming driver.Rows.
@@ -111,6 +162,7 @@ func newRows(mod *module, resPtr int32) (driver.Rows, error) {
 		typeIDs:     make([]int32, n),
 		colJSON:     make([]bool, n),
 		decimalMeta: map[int]decimalInfo{},
+		enumMeta:    map[int]enumInfo{},
 	}
 	for col := 0; col < n; col++ {
 		// duckdb_column_name(result, idx_t col) -> const char* (do not free).
@@ -136,6 +188,9 @@ func newRows(mod *module, resPtr int32) (driver.Rows, error) {
 				r.colJSON[col] = mod.goString(ap) == "JSON"
 				mod.m.Xduckdb_free(ap)
 			}
+		}
+		if tid == dtEnum {
+			r.enumMeta[col] = readEnumMeta(mod, lt)
 		}
 		// Free the logical type handle (pointer-to-handle arg, like destroy_result).
 		ltSlot := mod.allocOut(4)
@@ -179,7 +234,7 @@ func (r *rows) releaseChunk() {
 	r.chunk = 0
 	r.chunkLen = 0
 	r.cursor = 0
-	r.listDecs = nil
+	r.nestedDecs = nil
 }
 
 // Next decodes the next row into dest. Returns io.EOF when the result is drained.
@@ -224,17 +279,19 @@ func (r *rows) Next(dest []driver.Value) (err error) {
 			dest[col] = nil
 			continue
 		}
-		if r.typeIDs[col] == dtList {
-			// Native LIST result column (e.g. a bare ARRAY_AGG/list() in the
-			// SELECT): decode recursively to []any of decoded child cells, the
-			// same shape duckdb-go scans (and the UDF argument path delivers).
-			d := r.listDecs[col]
+		switch r.typeIDs[col] {
+		case dtList, dtStruct, dtMap:
+			// Nested result column (LIST/STRUCT/MAP, incl. arbitrary nesting):
+			// decode recursively via vecDecoder — LIST -> []any, STRUCT ->
+			// map[string]any, MAP -> map[any]any, the same shapes duckdb-go
+			// scans (and the UDF argument path delivers).
+			d := r.nestedDecs[col]
 			if d == nil {
 				d = mod.newVecDecoder(vec)
-				if r.listDecs == nil {
-					r.listDecs = make(map[int]*vecDecoder)
+				if r.nestedDecs == nil {
+					r.nestedDecs = make(map[int]*vecDecoder)
 				}
-				r.listDecs[col] = d
+				r.nestedDecs[col] = d
 			}
 			dest[col] = d.cell(int64(row))
 			continue
@@ -300,13 +357,20 @@ func (r *rows) decode(col int, dataPtr int32, row int) driver.Value {
 	case dtDouble:
 		return mod.readF64(dataPtr + int32(row*8))
 
-	case dtVarchar, dtEnum:
+	case dtVarchar:
 		s, _ := readStringT(mod, dataPtr+int32(row*16))
 		if r.colJSON[col] {
 			// JSON column: deliver the parsed native value (duckdb-go semantics).
 			return DecodeJSONNative(s)
 		}
 		return s
+	case dtEnum:
+		// ENUM cells are dictionary INDEXES (uint8/16/32 per the enum's size),
+		// not string_t — decode the index and look up the dictionary string.
+		// (Decoding these 16-byte-stride as string_t sliced garbage pointers
+		// out of wasm memory: "slice bounds out of range" panics.)
+		info := r.enumMeta[col]
+		return info.value(mod, dataPtr, row)
 	case dtBlob:
 		_, b := readStringT(mod, dataPtr+int32(row*16))
 		return b

@@ -308,8 +308,8 @@ func forEachStatement(query string, fn func(stmt string)) {
 }
 
 // ExecContext implements driver.ExecerContext by preparing, executing, and
-// destroying a one-shot statement. Argument-less multi-statement text (which
-// duckdb_prepare rejects) falls back to direct duckdb_query execution.
+// destroying a one-shot statement. Argument-less text the prepared path cannot
+// run natively falls back to direct duckdb_query execution (see execRawLocked).
 func (c *conn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (res driver.Result, err error) {
 	defer guardEnginePanic(&err)
 	c.mu.Lock()
@@ -317,41 +317,61 @@ func (c *conn) ExecContext(ctx context.Context, query string, args []driver.Name
 	return c.execLocked(query, args)
 }
 
-// execLocked is the shared Exec path (ExecContext, simpleExec). It prepares
-// and executes query; when there are no bind args and duckdb_prepare rejected
-// the text as multi-statement, it retries through mod.queryRaw (duckdb_query),
-// which runs every statement and reports the last one's rows-changed count.
-// QueryContext deliberately has NO such fallback: database/sql's Query is a
-// single-result contract. Callers must hold c.mu.
+// execLocked is the shared Exec path (ExecContext, simpleExec). ARGUMENT-LESS
+// text runs directly through duckdb_query (execRawLocked) — the same entry
+// point every native DuckDB client uses for plain SQL — so semantics and error
+// text match native DuckDB exactly. Only statements with bind args take the
+// prepare/bind/execute path. Callers must hold c.mu.
 func (c *conn) execLocked(query string, args []driver.NamedValue) (driver.Result, error) {
+	if len(args) == 0 {
+		return c.execRawLocked(query)
+	}
 	st, err := c.prepareLocked(query)
 	if err != nil {
-		if len(args) == 0 && isMultiStatementErr(err) {
-			n, qerr := c.mod.queryRaw(c.con, query)
-			if qerr != nil {
-				c.noteTxFailureLocked(query)
-				return nil, qerr
-			}
-			c.noteTxSuccessLocked(query)
-			return &result{rowsAffected: n}, nil
-		}
 		return nil, err
 	}
 	defer st.closeLocked()
 	return st.execLocked(args)
 }
 
-// isMultiStatementErr matches duckdb_prepare's refusal of multi-statement SQL.
-func isMultiStatementErr(err error) bool {
-	return strings.Contains(err.Error(), "Cannot prepare multiple statements at once")
+// execRawLocked runs query through duckdb_query and reports the last
+// statement's rows-changed count. Going through duckdb_query instead of
+// prepare+execute_prepared is what makes argument-less Exec NATIVE:
+//   - multi-statement batches and statements the preprocessor expands into
+//     several (PIVOT) — which duckdb_prepare refuses outright — run completely
+//     (the result is the last statement's), and comment-only text ("No
+//     statement to prepare!") is an empty success, as in native Query;
+//   - error ORDER and TEXT match native DuckDB: prepare+execute splits the
+//     pipeline in a place native clients never do, surfacing prepare-stage
+//     errors (e.g. constant folding "Map keys must be unique") where native
+//     DuckDB reports the execution-stage error first (CTAS catalog conflict),
+//     and "Values were not provided..." where native DuckDB says "Expected N
+//     parameters, but none were supplied" for unbound parameters.
+//
+// Callers must hold c.mu.
+func (c *conn) execRawLocked(query string) (driver.Result, error) {
+	n, qerr := c.mod.queryRaw(c.con, query)
+	if qerr != nil {
+		c.noteTxFailureLocked(query)
+		return nil, qerr
+	}
+	c.noteTxSuccessLocked(query)
+	return &result{rowsAffected: n}, nil
 }
 
-// QueryContext implements driver.QueryerContext by preparing and executing a
-// one-shot statement; the returned Rows owns its statement and closes it on Close.
+// QueryContext implements driver.QueryerContext. ARGUMENT-LESS text runs
+// directly through duckdb_query (queryRawRowsLocked) for native semantics —
+// see execRawLocked for the full rationale (multi-statement/PIVOT support,
+// native error order and text). Text with bind args prepares and executes a
+// one-shot statement; those returned Rows own the statement and close it on
+// Close.
 func (c *conn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (rws driver.Rows, err error) {
 	defer guardEnginePanic(&err)
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if len(args) == 0 {
+		return c.queryRawRowsLocked(query)
+	}
 	st, err := c.prepareLocked(query)
 	if err != nil {
 		return nil, err
@@ -362,6 +382,26 @@ func (c *conn) QueryContext(ctx context.Context, query string, args []driver.Nam
 		return nil, err
 	}
 	return &stmtRows{Rows: rows, st: st, c: c}, nil
+}
+
+// queryRawRowsLocked runs query through duckdb_query — the direct non-prepared
+// C API entry point — and hands the result to newRows (which takes ownership
+// of the result buffer). Multi-statement text executes every statement and
+// returns the last one's rows. Callers must hold c.mu.
+func (c *conn) queryRawRowsLocked(query string) (driver.Rows, error) {
+	mod := c.mod
+	sqlPtr := mod.cstring(query)
+	defer mod.free(sqlPtr)
+	resPtr := mod.allocOut(sizeofDuckdbResult)
+	if rc := mod.m.Xduckdb_query(c.con, sqlPtr, resPtr); rc != 0 {
+		err := engineErr("query", mod.resultError(resPtr))
+		mod.m.Xduckdb_destroy_result(resPtr)
+		mod.free(resPtr)
+		c.noteTxFailureLocked(query)
+		return nil, err
+	}
+	c.noteTxSuccessLocked(query)
+	return newRows(mod, resPtr)
 }
 
 // Ping implements driver.Pinger by running a trivial "SELECT 1".

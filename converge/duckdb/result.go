@@ -734,7 +734,14 @@ func timestampValue(raw int64, unit time.Duration) driver.Value {
 	case tsNegInfinity:
 		return "-infinity"
 	}
-	return epoch.Add(time.Duration(raw) * unit)
+	// Split into whole seconds + sub-second remainder instead of
+	// epoch.Add(time.Duration(raw)*unit): the Duration multiplication is int64
+	// NANOSECONDS and silently overflows beyond ±292 years from epoch, mangling
+	// valid far-range timestamps like 290309-12-22 (BC) 00:00:00
+	// (timestamp_limits.test). time.Unix normalizes a negative remainder and
+	// covers DuckDB's full TIMESTAMP range.
+	perSec := int64(time.Second / unit)
+	return time.Unix(raw/perSec, (raw%perSec)*int64(unit)).UTC()
 }
 
 // dateValue maps a raw DATE payload (int32 days since epoch) to a time.Time,

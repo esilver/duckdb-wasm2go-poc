@@ -24,10 +24,16 @@
 #include "duckdb/main/capi/capi_internal.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/virtual_file_system.hpp"
+// duckdb::Glob(s, slen, pattern, plen): the engine's own segment matcher
+// (*, ?, [..], \escape) — reused so host-FS glob semantics match LocalFileSystem
+// exactly.
+#include "duckdb/function/scalar/string_common.hpp"
 
 #include <cstdint>
 #include <cstring>
+#include <queue>
 #include <string>
+#include <vector>
 
 // ---- IMPORTED host functions (become env.host_* wasm imports) ---------------
 // Kept to plain ints/pointers (no by-value structs). All host fds are >= 0 on
@@ -127,7 +133,7 @@ public:
 			if (flags.ReturnNullIfNotExists()) {
 				return nullptr;
 			}
-			throw IOException("HostFileSystem: failed to open \"{}\" (errno {})", path, (int)-fd);
+			throw IOException("HostFileSystem: failed to open \"%s\" (errno %d)", path, (int)-fd);
 		}
 		return make_uniq<HostFileHandle>(*this, path, flags, (int32_t)fd);
 	}
@@ -137,10 +143,10 @@ public:
 		auto &h = handle.Cast<HostFileHandle>();
 		int64_t got = host_pread(h.fd, buffer, nr_bytes, (int64_t)location);
 		if (got < 0) {
-			throw IOException("HostFileSystem: read failed on \"{}\" (errno {})", handle.path, (int)-got);
+			throw IOException("HostFileSystem: read failed on \"%s\" (errno %d)", handle.path, (int)-got);
 		}
 		if (got != nr_bytes) {
-			throw IOException("HostFileSystem: short read on \"{}\" ({}/{})", handle.path,
+			throw IOException("HostFileSystem: short read on \"%s\" (%lld/%lld)", handle.path,
 			                  (long long)got, (long long)nr_bytes);
 		}
 	}
@@ -148,10 +154,10 @@ public:
 		auto &h = handle.Cast<HostFileHandle>();
 		int64_t put = host_pwrite(h.fd, buffer, nr_bytes, (int64_t)location);
 		if (put < 0) {
-			throw IOException("HostFileSystem: write failed on \"{}\" (errno {})", handle.path, (int)-put);
+			throw IOException("HostFileSystem: write failed on \"%s\" (errno %d)", handle.path, (int)-put);
 		}
 		if (put != nr_bytes) {
-			throw IOException("HostFileSystem: short write on \"{}\" ({}/{})", handle.path,
+			throw IOException("HostFileSystem: short write on \"%s\" (%lld/%lld)", handle.path,
 			                  (long long)put, (long long)nr_bytes);
 		}
 	}
@@ -161,7 +167,7 @@ public:
 		auto &h = handle.Cast<HostFileHandle>();
 		int64_t got = host_pread(h.fd, buffer, nr_bytes, (int64_t)h.position);
 		if (got < 0) {
-			throw IOException("HostFileSystem: read failed on \"{}\" (errno {})", handle.path, (int)-got);
+			throw IOException("HostFileSystem: read failed on \"%s\" (errno %d)", handle.path, (int)-got);
 		}
 		h.position += (idx_t)got;
 		return got;
@@ -170,7 +176,7 @@ public:
 		auto &h = handle.Cast<HostFileHandle>();
 		int64_t put = host_pwrite(h.fd, buffer, nr_bytes, (int64_t)h.position);
 		if (put < 0) {
-			throw IOException("HostFileSystem: write failed on \"{}\" (errno {})", handle.path, (int)-put);
+			throw IOException("HostFileSystem: write failed on \"%s\" (errno %d)", handle.path, (int)-put);
 		}
 		h.position += (idx_t)put;
 		return put;
@@ -180,7 +186,7 @@ public:
 		auto &h = handle.Cast<HostFileHandle>();
 		int64_t sz = host_size(h.fd);
 		if (sz < 0) {
-			throw IOException("HostFileSystem: stat failed on \"{}\" (errno {})", handle.path, (int)-sz);
+			throw IOException("HostFileSystem: stat failed on \"%s\" (errno %d)", handle.path, (int)-sz);
 		}
 		return sz;
 	}
@@ -202,7 +208,7 @@ public:
 		auto &h = handle.Cast<HostFileHandle>();
 		int32_t rc = host_trunc(h.fd, new_size);
 		if (rc < 0) {
-			throw IOException("HostFileSystem: truncate failed on \"{}\" (errno {})", handle.path, (int)-rc);
+			throw IOException("HostFileSystem: truncate failed on \"%s\" (errno %d)", handle.path, (int)-rc);
 		}
 	}
 
@@ -246,7 +252,7 @@ public:
 	void RemoveFile(const string &filename, optional_ptr<FileOpener> opener) override {
 		int32_t rc = host_unlink(filename.c_str(), (int32_t)filename.size());
 		if (rc < 0) {
-			throw IOException("HostFileSystem: remove failed on \"{}\" (errno {})", filename, (int)-rc);
+			throw IOException("HostFileSystem: remove failed on \"%s\" (errno %d)", filename, (int)-rc);
 		}
 	}
 	bool TryRemoveFile(const string &filename, optional_ptr<FileOpener> opener) override {
@@ -257,7 +263,7 @@ public:
 		int32_t rc = host_rename(source.c_str(), (int32_t)source.size(), target.c_str(),
 		                         (int32_t)target.size());
 		if (rc < 0) {
-			throw IOException("HostFileSystem: rename \"{}\" -> \"{}\" failed (errno {})", source, target,
+			throw IOException("HostFileSystem: rename \"%s\" -> \"%s\" failed (errno %d)", source, target,
 			                  (int)-rc);
 		}
 	}
@@ -266,13 +272,13 @@ public:
 	void CreateDirectory(const string &directory, optional_ptr<FileOpener> opener) override {
 		int32_t rc = host_mkdir(directory.c_str(), (int32_t)directory.size());
 		if (rc < 0) {
-			throw IOException("HostFileSystem: mkdir \"{}\" failed (errno {})", directory, (int)-rc);
+			throw IOException("HostFileSystem: mkdir \"%s\" failed (errno %d)", directory, (int)-rc);
 		}
 	}
 	void RemoveDirectory(const string &directory, optional_ptr<FileOpener> opener) override {
 		int32_t rc = host_rmdir(directory.c_str(), (int32_t)directory.size());
 		if (rc < 0) {
-			throw IOException("HostFileSystem: rmdir \"{}\" failed (errno {})", directory, (int)-rc);
+			throw IOException("HostFileSystem: rmdir \"%s\" failed (errno %d)", directory, (int)-rc);
 		}
 	}
 	bool ListFiles(const string &directory, const std::function<void(const string &, bool)> &callback,
@@ -301,12 +307,149 @@ public:
 		return true;
 	}
 
-	// ----- glob: no wildcard support; pass the literal path through if it exists.
-	// (read_csv_auto('/abs/file.csv') globs the literal path first.) ------------
+	// ----- glob ----------------------------------------------------------------
+	// Mirrors LocalFileSystem's LocalGlobResult walk (amalg/duckdb.cpp): the path
+	// is split on separators; non-glob components are appended literally, glob
+	// components ('*', '?', '[..]') are matched against host_listdir entries with
+	// the engine's own duckdb::Glob matcher, and '**' crawls recursively (also
+	// matching zero directory levels). Relative paths resolve against the process
+	// cwd on the Go side, like every other host_* call. Expansion order uses the
+	// same smallest-path-first priority queue as LocalGlobResult; within one
+	// directory, os.ReadDir (Go side) yields names sorted.
 	vector<OpenFileInfo> Glob(const string &path, FileOpener *opener) override {
 		vector<OpenFileInfo> result;
-		if (host_exists(path.c_str(), (int32_t)path.size()) == 1) {
-			result.emplace_back(path);
+		if (path.empty()) {
+			return result;
+		}
+		if (!FileSystem::HasGlob(path)) {
+			// no wildcards: literal path, if it exists
+			// (read_csv_auto('/abs/file.csv') globs the literal path first)
+			if (host_exists(path.c_str(), (int32_t)path.size()) == 1) {
+				result.emplace_back(path);
+			}
+			return result;
+		}
+
+		// split the path into components (same loop as LocalGlobResult: the first
+		// split keeps any leading separator, empty segments are skipped)
+		vector<string> splits;
+		idx_t last_pos = 0;
+		for (idx_t i = 0; i < path.size(); i++) {
+			if (path[i] != '\\' && path[i] != '/') {
+				continue;
+			}
+			if (i == last_pos) {
+				last_pos = i + 1;
+				continue;
+			}
+			if (splits.empty()) {
+				splits.push_back(path.substr(0, i));
+			} else {
+				splits.push_back(path.substr(last_pos, i - last_pos));
+			}
+			last_pos = i + 1;
+		}
+		splits.push_back(path.substr(last_pos));
+
+		idx_t crawl_count = 0;
+		for (auto &s : splits) {
+			if (s == "**") {
+				crawl_count++;
+			}
+		}
+		if (crawl_count > 1) {
+			throw IOException("Cannot use multiple '**' in one path");
+		}
+
+		// work item: a resolved directory prefix + the index of the next component
+		struct ExpandDir {
+			string path;
+			idx_t split_index;
+			bool is_empty; // "no prefix yet" (relative-path start)
+			ExpandDir(string p, idx_t si, bool e = false) : path(std::move(p)), split_index(si), is_empty(e) {
+			}
+			bool operator<(const ExpandDir &other) const {
+				return path > other.path; // top() = lexicographically smallest
+			}
+		};
+		std::priority_queue<ExpandDir> work;
+
+		bool absolute = path[0] == '/' || path[0] == '\\';
+		if (absolute) {
+			// like LocalGlobResult: no glob support in the FIRST level of an
+			// absolute path; start expansion below it
+			if (splits.size() > 1) {
+				work.emplace(splits[0], (idx_t)1);
+			}
+		} else {
+			work.emplace(".", (idx_t)0, true);
+		}
+
+		while (!work.empty()) {
+			ExpandDir dir = work.top();
+			work.pop();
+			const string &component = splits[dir.split_index];
+			bool is_last = dir.split_index + 1 == splits.size();
+			if (!FileSystem::HasGlob(component)) {
+				// literal component: append as-is
+				if (dir.is_empty) {
+					work.emplace(component, dir.split_index + 1);
+				} else if (is_last) {
+					string filename = JoinPath(dir.path, component);
+					if (FileExists(filename, opener) || DirectoryExists(filename, opener)) {
+						result.emplace_back(std::move(filename));
+					}
+				} else {
+					work.emplace(JoinPath(dir.path, component), dir.split_index + 1);
+				}
+				continue;
+			}
+			if (component == "**") {
+				if (!is_last) {
+					// '**' also matches zero levels (dir/**/f also matches dir/f)
+					work.emplace(dir.path, dir.split_index + 1);
+				}
+				ListFiles(
+				    dir.path,
+				    [&](const string &name, bool is_dir) {
+					    string full = JoinPath(dir.path, name);
+					    if (is_dir) {
+						    work.emplace(std::move(full), dir.split_index); // keep crawling
+					    } else if (is_last) {
+						    result.emplace_back(std::move(full));
+					    }
+				    },
+				    opener);
+				continue;
+			}
+			// plain glob component: match this directory level with the engine's
+			// matcher. Last component matches files, inner components directories
+			// (same as LocalFileSystem's GlobFilesInternal).
+			ListFiles(
+			    dir.path,
+			    [&](const string &name, bool is_dir) {
+				    if (is_dir == is_last) {
+					    return;
+				    }
+				    if (!duckdb::Glob(name.c_str(), name.size(), component.c_str(), component.size())) {
+					    return;
+				    }
+				    string full = JoinPath(dir.path, name);
+				    if (is_last) {
+					    result.emplace_back(std::move(full));
+				    } else {
+					    work.emplace(std::move(full), dir.split_index + 1);
+				    }
+			    },
+			    opener);
+		}
+
+		if (result.empty()) {
+			// last-ditch effort (mirrors LocalGlobResult::ExpandNextPath): search
+			// the pattern as a string literal
+			if (host_exists(path.c_str(), (int32_t)path.size()) == 1) {
+				result.emplace_back(path);
+			}
 		}
 		return result;
 	}

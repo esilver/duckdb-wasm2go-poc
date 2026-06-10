@@ -400,7 +400,12 @@ def split_function(func_lines, fname, params, rettype):
                 out.append('\t\t' + line)  # indentation is cosmetic; compiler ignores
             out.append('\t}')
         if next_code == -2:
-            out.append('\tpanic("unreachable")')
+            if voidfn:
+                # a void function may legitimately fall off the body end
+                # (implicit return) — found via Fn35474 DATEDIFF corpus panic
+                out.append('\treturn -1')
+            else:
+                out.append('\tpanic("unreachable")')
         else:
             out.append('\treturn %d' % next_code)
         out.append('}')

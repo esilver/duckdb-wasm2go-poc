@@ -228,3 +228,54 @@ func TestExoticNested(t *testing.T) {
 	expectString(t, "SELECT [170141183460469231731687303715884105727::HUGEINT]",
 		"[170141183460469231731687303715884105727]")
 }
+
+// TestUUIDResult: UUID columns decode to the canonical 8-4-4-4-12 form
+// (BaseUUID::ToString MSB-flip), flat and nested.
+func TestUUIDResult(t *testing.T) {
+	expectString(t, "SELECT '00112233-4455-6677-8899-aabbccddeeff'::UUID",
+		"00112233-4455-6677-8899-aabbccddeeff")
+	expectString(t, "SELECT 'ffffffff-ffff-ffff-ffff-ffffffffffff'::UUID",
+		"ffffffff-ffff-ffff-ffff-ffffffffffff")
+	expectString(t, "SELECT ['00000000-0000-0000-0000-000000000000'::UUID]",
+		"[00000000-0000-0000-0000-000000000000]")
+}
+
+// TestBignumResult: BIGNUM (varint) columns decode to the exact decimal string
+// (test_bignum_sum.test shapes), flat and nested.
+func TestBignumResult(t *testing.T) {
+	expectString(t, "SELECT 9223372036854775808::BIGNUM + 1::BIGNUM", "9223372036854775809")
+	expectString(t, "SELECT (-10)::BIGNUM + (-1)::BIGNUM", "-11")
+	expectString(t, "SELECT 0::BIGNUM", "0")
+	expectString(t, "SELECT [1::BIGNUM]", "[1]")
+}
+
+// TestGeometryResult: GEOMETRY columns decode WKB to WKT (Geometry::ToString),
+// including EMPTY parts and collections.
+func TestGeometryResult(t *testing.T) {
+	expectString(t, "SELECT 'POINT (1 2)'::GEOMETRY", "POINT (1 2)")
+	expectString(t, "SELECT 'POINT EMPTY'::GEOMETRY", "POINT EMPTY")
+	expectString(t, "SELECT 'LINESTRING (0 0, 1 1)'::GEOMETRY", "LINESTRING (0 0, 1 1)")
+	expectString(t, "SELECT 'POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))'::GEOMETRY",
+		"POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))")
+	expectString(t, "SELECT 'POINT Z (1 2 3)'::GEOMETRY", "POINT Z (1 2 3)")
+	expectString(t, "SELECT 'GEOMETRYCOLLECTION (POINT (1 2), LINESTRING EMPTY)'::GEOMETRY",
+		"GEOMETRYCOLLECTION (POINT (1 2), LINESTRING EMPTY)")
+	expectString(t, "SELECT 'POINT (0.5 -1.25)'::GEOMETRY", "POINT (0.5 -1.25)")
+}
+
+// TestVariantResult: VARIANT cells decode to the exact Value::CastAs(VARCHAR)
+// string — scalars bare, ARRAY items raw, OBJECT values quoted-if-needed
+// (json_cast.test / test_all_types.test shapes).
+func TestVariantResult(t *testing.T) {
+	expectString(t, `SELECT '"test"'::JSON::VARIANT`, "test")
+	expectString(t, "SELECT 42::VARIANT", "42")
+	expectString(t, "SELECT {'a': true, 'b': 42}::VARIANT", "{'a': true, 'b': 42}")
+	expectString(t, "SELECT [1, 2, 3]::VARIANT", "[1, 2, 3]")
+	expectString(t, `SELECT '{"hello": [1, true, null]}'::JSON::VARIANT`,
+		"{'hello': [1, true, NULL]}")
+	expectString(t, "SELECT {'t': '00:11:22'::TIME}::VARIANT", "{'t': '00:11:22'}")
+	expectString(t, "SELECT 1.5::FLOAT::VARIANT", "1.5")
+	expectString(t, "SELECT '2020-05-05'::DATE::VARIANT", "2020-05-05")
+	// VARIANT inside a regular LIST goes through the vecDecoder path.
+	expectString(t, "SELECT [42::VARIANT, NULL]", "[42 <nil>]")
+}

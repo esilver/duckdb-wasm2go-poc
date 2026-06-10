@@ -71,6 +71,9 @@ type vecDecoder struct {
 	// GetTags = entries[0], GetMember(i) = entries[i+1]).
 	tag     *vecDecoder
 	members []*vecDecoder
+	// variant is VARIANT's structural decoder (physical 4-child struct; cells
+	// decode to their final VARCHAR-cast string, see variant.go).
+	variant *variantDec
 }
 
 type structFieldDec struct {
@@ -140,6 +143,8 @@ func (mod *module) newVecDecoder(vec int32) *vecDecoder {
 		// [r*arraySize, (r+1)*arraySize).
 		d.arraySize = m.Xduckdb_array_type_array_size(lt)
 		d.child = mod.newVecDecoder(m.Xduckdb_array_vector_get_child(vec))
+	case dtVariant:
+		d.variant = mod.newVariantDec(vec)
 	}
 	destroyLogicalType(mod, lt)
 	return d
@@ -147,6 +152,12 @@ func (mod *module) newVecDecoder(vec int32) *vecDecoder {
 
 // cell decodes the row'th cell. NULL cells decode to nil.
 func (d *vecDecoder) cell(row int64) any {
+	if d.variant != nil {
+		if !d.mod.readValid(d.validPtr, row) {
+			return nil
+		}
+		return d.variant.render(row)
+	}
 	if d.typeID == dtList {
 		if !d.mod.readValid(d.validPtr, row) {
 			return nil

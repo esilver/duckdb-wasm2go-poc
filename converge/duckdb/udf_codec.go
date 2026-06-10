@@ -211,6 +211,17 @@ func (mod *module) readCellT(typeID, scale, internalType, dataPtr, validPtr int3
 		_, b := readStringT(mod, dataPtr+int32(row*16))
 		return bitString(b)
 
+	case dtUuid:
+		return uuidString(mod, dataPtr, int(row))
+
+	case dtBignum:
+		_, b := readStringT(mod, dataPtr+int32(row*16))
+		return bignumString(b)
+
+	case dtGeometry:
+		_, b := readStringT(mod, dataPtr+int32(row*16))
+		return geometryString(b)
+
 	default:
 		return nil
 	}

@@ -48,6 +48,9 @@ var scalarTypeNames = map[int32]string{
 	dtTimeTz:      "TIME WITH TIME ZONE",
 	dtTimestampTz: "TIMESTAMP WITH TIME ZONE",
 	dtTimeNs:      "TIME_NS",
+	dtBignum:      "BIGNUM",
+	dtGeometry:    "GEOMETRY",
+	dtVariant:     "VARIANT",
 }
 
 // typeName renders the logical type lt's DuckDB type name, recursing into

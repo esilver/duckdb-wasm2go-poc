@@ -7,6 +7,7 @@ package duckdb
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"net/url"
@@ -34,6 +35,17 @@ func (a modABI) GetExceptionPtr(excHeader int32) int32 {
 	return a.m.X__cxa_get_exception_ptr(excHeader)
 }
 func (a modABI) DynamicCast(obj, srcType, dstType, offset int32) int32 { return 0 }
+
+// IncrementExceptionRefcount / DecrementExceptionRefcount implement
+// exhost.ExceptionRefcounter by forwarding to the module's NATIVE refcount
+// helpers, so a caught exception object is destroyed+freed (not leaked) when
+// its last reference (catch scope or std::exception_ptr) is released.
+func (a modABI) IncrementExceptionRefcount(exc int32) {
+	a.m.X__cxa_increment_exception_refcount(exc)
+}
+func (a modABI) DecrementExceptionRefcount(exc int32) {
+	a.m.X__cxa_decrement_exception_refcount(exc)
+}
 func (a modABI) Malloc(n int32) int32                                  { return a.m.Xmalloc(n) }
 func (a modABI) Free(ptr int32)                                        { a.m.Xfree(ptr) }
 func (a modABI) ReadU32(ptr int32) int32 {
@@ -151,6 +163,19 @@ func (mod *module) inject(fn any) int32 {
 // convert-and-rethrow loses it from duckdb_result_error; we recover it from the
 // host). Returns "" if none.
 func (mod *module) lastError() string { return mod.e.Host.LastThrowMessage() }
+
+// resultError returns the error text of a failed duckdb_result — the SAME
+// formatted message native DuckDB surfaces ("<Type> Error: <message>" plus the
+// "LINE n: ... ^" query context appended by ClientContext::ProcessError) —
+// falling back to the host's last-thrown exception message when the result
+// carries none.
+func (mod *module) resultError(resPtr int32) string {
+	msg := mod.goString(mod.m.Xduckdb_result_error(resPtr))
+	if msg == "" {
+		msg = mod.lastError()
+	}
+	return msg
+}
 
 // ---- low-level wasm-memory marshalling (shared by driver.go + result.go) -----
 
@@ -317,11 +342,7 @@ func (mod *module) queryRaw(con int32, sql string) (rowsChanged int64, err error
 		mod.free(resPtr)
 	}()
 	if rc := mod.m.Xduckdb_query(con, sqlPtr, resPtr); rc != 0 {
-		msg := mod.goString(mod.m.Xduckdb_result_error(resPtr))
-		if msg == "" {
-			msg = mod.lastError()
-		}
-		return 0, fmt.Errorf("duckdb query: %s", orUnknown(msg))
+		return 0, engineErr("query", mod.resultError(resPtr))
 	}
 	return mod.m.Xduckdb_rows_changed(resPtr), nil
 }
@@ -344,4 +365,17 @@ func orUnknown(s string) string {
 		return "unknown error"
 	}
 	return s
+}
+
+// engineErr wraps an engine error message as a driver error. The message is
+// surfaced VERBATIM — native DuckDB error text such as
+// "Binder Error: ...\nLINE 1: ...\n         ^" — so callers and test harnesses
+// match against exactly what native DuckDB produces (its own sqllogictest
+// anchors regexes at the start of that text). op is only used when the engine
+// produced no message at all.
+func engineErr(op, msg string) error {
+	if msg == "" {
+		return fmt.Errorf("duckdb %s: unknown error", op)
+	}
+	return errors.New(msg)
 }

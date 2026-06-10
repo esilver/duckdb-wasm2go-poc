@@ -299,9 +299,10 @@ func (r *rows) Next(dest []driver.Value) (err error) {
 		case dtList, dtStruct, dtMap, dtUnion, dtArray:
 			// Nested result column (LIST/STRUCT/MAP/UNION/ARRAY, incl. arbitrary
 			// nesting): decode recursively via vecDecoder — LIST/ARRAY -> []any,
-			// STRUCT -> map[string]any, MAP -> map[any]any, UNION -> the active
-			// member's value, the same shapes duckdb-go scans (and the UDF
-			// argument path delivers).
+			// STRUCT -> Struct (declared field order), MAP -> MapValue (entry
+			// order, unhashable keys OK), UNION -> the active member's value,
+			// the same shapes the UDF argument path delivers (duckdbcompat
+			// converts the carriers to duckdb-go's map shapes).
 			d := r.nestedDecs[col]
 			if d == nil {
 				d = mod.newVecDecoder(vec)

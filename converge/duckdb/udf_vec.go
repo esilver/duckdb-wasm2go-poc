@@ -16,25 +16,26 @@
 //     recurse. (The googlesqlite STRING_AGG lowering — array_agg into
 //     googlesqlite_array_to_string(LIST, sep) — needs exactly this; without it
 //     the LIST arg decoded to nil and the UDF body nil-dereferenced.)
-//   - STRUCT decoding (recursive): a STRUCT cell decodes to a map[string]any of
-//     decoded child cells — the shape duckdb-go scans STRUCT into. Struct child
+//   - STRUCT decoding (recursive): a STRUCT cell decodes to a Struct carrier
+//     (nested.go) of decoded child cells in DECLARED field order (duckdb-go
+//     scans to map[string]any; the duckdbcompat layer converts). Struct child
 //     vectors are PARALLEL arrays (no per-row offsets): row r of the struct is
 //     row r of each child vector, reached via duckdb_struct_vector_get_child;
 //     field names come from the logical type. LIST-of-STRUCT / STRUCT-with-LIST
 //     nest for free through the recursion.
 //   - MAP decoding: a MAP vector is physically a LIST whose child is a
-//     STRUCT{key, value} vector, so a MAP cell decodes to a map[any]any by
-//     walking the list entries and pairing the struct's key/value children
-//     (duckdb-go's Map shape). Non-comparable keys (e.g. LIST keys) are not
-//     supported and decode the cell to nil.
+//     STRUCT{key, value} vector, so a MAP cell decodes to a MapValue carrier
+//     (nested.go) by walking the list entries and pairing the struct's
+//     key/value children in engine order (DuckDB preserves map entry order).
+//     The carrier admits unhashable keys (LIST/STRUCT keys), which a Go
+//     map[any]any cannot; duckdbcompat converts to map[any]any (duckdb-go's
+//     Map shape) when the keys are hashable.
 //   - UNION decoding: physically a STRUCT vector whose child 0 is the UTINYINT
 //     tag and children 1..N the member vectors; a cell decodes to the ACTIVE
 //     member's value (duckdb-go scan semantics).
 //   - ARRAY decoding (fixed-size list): the child vector holds arraySize
 //     elements per row with no entry headers; a cell decodes to []any.
 package duckdb
-
-import "reflect"
 
 // Nested duckdb_type ids (logical-only; the flat codec can't decode them,
 // vecDecoder handles them structurally).
@@ -164,9 +165,13 @@ func (d *vecDecoder) cell(row int64) any {
 			return nil
 		}
 		// Child vectors are parallel arrays: row of the struct = row of each child.
-		out := make(map[string]any, len(d.fields))
-		for _, f := range d.fields {
-			out[f.name] = f.dec.cell(row)
+		out := Struct{
+			Names:  make([]string, len(d.fields)),
+			Values: make([]any, len(d.fields)),
+		}
+		for i, f := range d.fields {
+			out.Names[i] = f.name
+			out.Values[i] = f.dec.cell(row)
 		}
 		return out
 	}
@@ -204,13 +209,10 @@ func (d *vecDecoder) cell(row int64) any {
 			return nil // malformed map child; never expected
 		}
 		kd, vd := d.child.fields[0].dec, d.child.fields[1].dec
-		out := make(map[any]any, n)
+		out := MapValue{Keys: make([]any, n), Values: make([]any, n)}
 		for i := int64(0); i < n; i++ {
-			k := kd.cell(off + i)
-			if !comparableKey(k) {
-				return nil // non-hashable key type (e.g. LIST key): unsupported
-			}
-			out[k] = vd.cell(off + i)
+			out.Keys[i] = kd.cell(off + i)
+			out.Values[i] = vd.cell(off + i)
 		}
 		return out
 	}
@@ -239,13 +241,4 @@ func (d *vecDecoder) cell(row int64) any {
 		}
 	}
 	return v
-}
-
-// comparableKey reports whether a decoded MAP key can be used as a Go map key
-// (decoded LIST/STRUCT/BLOB keys are slices/maps and would panic on insert).
-func comparableKey(k any) bool {
-	if k == nil {
-		return true
-	}
-	return reflect.TypeOf(k).Comparable()
 }

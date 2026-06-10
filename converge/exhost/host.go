@@ -94,10 +94,21 @@ type Host struct {
 	// a get import has something coherent to return).
 	tempRet0 int32
 
-	// inflight is the exception currently unwinding: object header pointer +
-	// its std::type_info pointer, captured by __cxa_throw. A small stack of
-	// these supports rethrow / nested catch.
-	inflight []excRecord
+	// last is the exception currently unwinding (Emscripten's exceptionLast):
+	// set by __cxa_throw / __cxa_rethrow / __cxa_rethrow_primary_exception /
+	// __resumeException, cleared by __cxa_end_catch. find_matching_catch matches
+	// against THIS, never against the caught stack.
+	last excRecord
+
+	// caught is the stack of exceptions whose catch handlers are active
+	// (Emscripten's exceptionCaught): pushed by __cxa_begin_catch, popped by
+	// __cxa_end_catch. Keeping it SEPARATE from `last` is essential: a `throw B`
+	// inside a `catch (A)` handler must not make end_catch (run while B unwinds
+	// out of the handler) pop B — it ends A's handler. The old single-stack
+	// model conflated the two, so any catch-and-rethrow corrupted the thrown
+	// type and DuckDB's `catch (std::exception &)` stopped matching ("Unknown
+	// exception in ExecutorTask::Execute").
+	caught []excRecord
 
 	// typeIDs assigns a stable nonzero id per std::type_info pointer so that
 	// find_matching_catch and llvm_eh_typeid_for agree for the same type.
@@ -127,6 +138,73 @@ func (h *Host) LastThrowMessage() string { return h.lastThrowMsg }
 type excRecord struct {
 	exc int32 // exception object header pointer (what __cxa_throw was given)
 	typ int32 // std::type_info pointer
+}
+
+// ExceptionRefcounter is an OPTIONAL extension of ModuleABI. When the adapter
+// forwards to the module's exported __cxa_increment/decrement_exception_refcount,
+// the host keeps the in-memory exception header's refcount balanced exactly like
+// Emscripten's JS glue, and the module's own decrement destroys+frees the
+// exception object when the count returns to zero. Without it the host falls
+// back to raw counter writes and never destroys (a safe leak).
+type ExceptionRefcounter interface {
+	IncrementExceptionRefcount(exc int32)
+	DecrementExceptionRefcount(exc int32)
+}
+
+// Emscripten lays a 24-byte __cxa_exception header in linear memory immediately
+// BEFORE the thrown object pointer (the module's own native
+// __cxa_increment/decrement_exception_refcount and __cxa_get_exception_ptr read
+// these fields, which is how the offsets were verified against the generated
+// code): {u32 refcount; type_info* type; void (*dtor)(void*); bool caught;
+// bool rethrown; <pad>; void *adjustedPtr; <pad to 24>}.
+const (
+	hdrRefcountOff = -24
+	hdrTypeOff     = -20
+	hdrDtorOff     = -16
+	hdrFlagsOff    = -12 // byte 0 = caught, byte 1 = rethrown
+	hdrAdjustedOff = -8
+)
+
+func (h *Host) hdrType(exc int32) int32 { return h.abi.ReadU32(exc + hdrTypeOff) }
+
+func (h *Host) hdrCaught(exc int32) bool {
+	return h.abi.ReadU32(exc+hdrFlagsOff)&0xFF != 0
+}
+
+func (h *Host) setHdrCaught(exc int32, v bool) {
+	w := h.abi.ReadU32(exc+hdrFlagsOff) &^ 0xFF
+	if v {
+		w |= 1
+	}
+	h.abi.WriteU32(exc+hdrFlagsOff, w)
+}
+
+func (h *Host) hdrRethrown(exc int32) bool {
+	return h.abi.ReadU32(exc+hdrFlagsOff)&0xFF00 != 0
+}
+
+func (h *Host) setHdrRethrown(exc int32, v bool) {
+	w := h.abi.ReadU32(exc+hdrFlagsOff) &^ 0xFF00
+	if v {
+		w |= 0x100
+	}
+	h.abi.WriteU32(exc+hdrFlagsOff, w)
+}
+
+func (h *Host) incRef(exc int32) {
+	if rc, ok := h.abi.(ExceptionRefcounter); ok {
+		rc.IncrementExceptionRefcount(exc)
+		return
+	}
+	h.abi.WriteU32(exc+hdrRefcountOff, h.abi.ReadU32(exc+hdrRefcountOff)+1)
+}
+
+func (h *Host) decRef(exc int32) {
+	if rc, ok := h.abi.(ExceptionRefcounter); ok {
+		rc.DecrementExceptionRefcount(exc) // destroys + frees at refcount 0
+		return
+	}
+	h.abi.WriteU32(exc+hdrRefcountOff, h.abi.ReadU32(exc+hdrRefcountOff)-1)
 }
 
 // thrownPanic is the sentinel panicked from __cxa_throw / __resumeException to
@@ -202,13 +280,6 @@ func (h *Host) typeID(typeinfo int32) int32 {
 	return id
 }
 
-func (h *Host) top() (excRecord, bool) {
-	if len(h.inflight) == 0 {
-		return excRecord{}, false
-	}
-	return h.inflight[len(h.inflight)-1], true
-}
-
 // trampoline runs do() (the wrapped indirect call) and, on a thrown C++
 // exception, sets the module threw flag and reports threw=true. Non-throw Go
 // panics propagate unchanged. This is the recover pattern proven in T1,
@@ -229,8 +300,10 @@ func (h *Host) trampoline(do func()) {
 
 // ---- C++ exception ABI (non-invoke) ---------------------------------------
 
-// X__cxa_throw(ptr, typeinfo, dtor): record the in-flight exception and unwind
-// to the active invoke_ trampoline via panic. (T1)
+// X__cxa_throw(ptr, typeinfo, dtor): initialize the in-memory exception header
+// (mirroring Emscripten's ExceptionInfo.init — the module's native refcount /
+// get_exception_ptr helpers read it), record the in-flight exception, and
+// unwind to the active invoke_ trampoline via panic. (T1)
 func (h *Host) X__cxa_throw(ptr, typ, dtor int32) {
 	h.logf("__cxa_throw ptr=%d typ=%d dtor=%d", ptr, typ, dtor)
 	// Capture the what() message (libc++ runtime_error refstring char* at +4) so the
@@ -244,28 +317,53 @@ func (h *Host) X__cxa_throw(ptr, typ, dtor int32) {
 		}
 		fmt.Fprintf(os.Stderr, "[exhost] __cxa_throw type=%q msg=%q\n", name, h.lastThrowMsg)
 	}
-	h.inflight = append(h.inflight, excRecord{exc: ptr, typ: typ})
+	// Header init (fresh object from __cxa_allocate_exception): the TYPE write is
+	// what lets a later std::rethrow_exception recover the dynamic type — losing
+	// it is what degraded preserved errors to "Unknown exception in
+	// ExecutorTask::Execute".
+	h.abi.WriteU32(ptr+hdrRefcountOff, 0)
+	h.abi.WriteU32(ptr+hdrTypeOff, typ)
+	h.abi.WriteU32(ptr+hdrDtorOff, dtor)
+	h.abi.WriteU32(ptr+hdrFlagsOff, 0) // caught=false, rethrown=false
+	h.abi.WriteU32(ptr+hdrAdjustedOff, 0)
+	h.last = excRecord{exc: ptr, typ: typ}
 	h.uncaught++
 	panic(thrownPanic{exc: ptr, typ: typ})
 }
 
-// X__cxa_rethrow re-raises the exception at the top of the catch stack.
+// X__cxa_rethrow re-raises the exception whose catch handler is active (`throw;`
+// inside a catch block). Mirrors Emscripten: the record stays on the caught
+// stack (the catch block's __cxa_end_catch still runs) UNLESS it was pushed by
+// __cxa_rethrow_primary_exception, whose push exists only to be consumed here.
 func (h *Host) X__cxa_rethrow() {
-	rec, ok := h.top()
-	if !ok {
-		h.logf("__cxa_rethrow with no in-flight exception")
+	n := len(h.caught)
+	if n == 0 {
+		h.logf("__cxa_rethrow with no caught exception")
 		panic(thrownPanic{})
 	}
+	rec := h.caught[n-1]
+	if h.hdrRethrown(rec.exc) {
+		// Pushed by rethrow_primary_exception: pop, it has no catch scope of its own.
+		h.caught = h.caught[:n-1]
+	} else {
+		h.setHdrRethrown(rec.exc, true)
+		h.setHdrCaught(rec.exc, false)
+		h.uncaught++
+	}
+	h.last = rec
 	h.logf("__cxa_rethrow exc=%d typ=%d", rec.exc, rec.typ)
-	h.uncaught++
 	panic(thrownPanic{exc: rec.exc, typ: rec.typ})
 }
 
-// X__resumeException(ptr): no catch clause matched; keep unwinding. (T1)
+// X__resumeException(ptr): no catch clause matched (or a cleanup pad finished);
+// keep unwinding. Mirrors Emscripten: re-raise exceptionLast, re-deriving it
+// from ptr if a nested __cxa_end_catch cleared it during cleanup. (T1)
 func (h *Host) X__resumeException(ptr int32) {
-	rec, _ := h.top()
-	h.logf("__resumeException ptr=%d", ptr)
-	panic(thrownPanic{exc: ptr, typ: rec.typ})
+	if h.last.exc == 0 && ptr != 0 {
+		h.last = excRecord{exc: ptr, typ: h.hdrType(ptr)}
+	}
+	h.logf("__resumeException ptr=%d -> exc=%d typ=%d", ptr, h.last.exc, h.last.typ)
+	panic(thrownPanic{exc: h.last.exc, typ: h.last.typ})
 }
 
 // _emscripten_throw_longjmp is how a STANDALONE -fexceptions build models
@@ -290,24 +388,23 @@ func (h *Host) X_emscripten_throw_longjmp() {
 // return on the first that __cxa_can_catch accepts. _2 passes none, which means
 // "catch (...)" / cleanup: it matches unconditionally.
 func (h *Host) findMatch(catchTypes ...int32) int32 {
-	rec, ok := h.top()
-	if !ok {
+	exc := h.last.exc
+	if exc == 0 {
 		h.abi.TempretSet(0)
 		return 0
 	}
+	// The dynamic type comes from the in-memory header, NOT a Go-side stack:
+	// it survives std::exception_ptr capture/rethrow and nested catch cleanup.
+	thrownType := h.hdrType(exc)
 
-	// Scratch slot holding the candidate object pointer that __cxa_can_catch may
-	// adjust for a base-class catch. Seed it with the exception's object pointer
-	// (the C++ object, obtained from the exception header via the module's
-	// __cxa_get_exception_ptr; falls back to the header pointer itself).
-	objPtr := h.abi.GetExceptionPtr(rec.exc)
-	if objPtr == 0 {
-		objPtr = rec.exc
-	}
-	slot := h.abi.Malloc(4)
-	h.abi.WriteU32(slot, objPtr)
+	// Seed the header's adjustedPtr field with the thrown object and let
+	// __cxa_can_catch adjust it IN PLACE for a base-class catch (Emscripten's
+	// findMatchingCatch does exactly this) — the module's exported
+	// __cxa_get_exception_ptr, which __cxa_begin_catch returns, reads it back.
+	h.abi.WriteU32(exc+hdrAdjustedOff, exc)
+	slot := exc + hdrAdjustedOff
 
-	matchedType := int32(0) // 0 typeinfo -> catch-all id (1)
+	matchedType := int32(0)       // 0 typeinfo -> catch-all id (1)
 	found := len(catchTypes) == 0 // _2 (no candidates) is a catch-all
 
 	for _, ct := range catchTypes {
@@ -322,11 +419,18 @@ func (h *Host) findMatch(catchTypes ...int32) int32 {
 			found = true
 			break
 		}
-		h.abi.WriteU32(slot, objPtr)
-		cc := h.abi.CanCatch(ct, rec.typ, slot)
+		if ct == thrownType {
+			matchedType = ct
+			found = true
+			break
+		}
+		if thrownType == 0 {
+			continue // foreign/typeless exception: only catch (...) can take it
+		}
+		cc := h.abi.CanCatch(ct, thrownType, slot)
 		if DebugThrow {
 			fmt.Fprintf(os.Stderr, "[exhost] findMatch thrown=%q candidate catch=%q canCatch=%d\n",
-				h.cstrU32(h.abi.ReadU32(rec.typ+4)), h.cstrU32(h.abi.ReadU32(ct+4)), cc)
+				h.cstrU32(h.abi.ReadU32(thrownType+4)), h.cstrU32(h.abi.ReadU32(ct+4)), cc)
 		}
 		if cc != 0 {
 			matchedType = ct
@@ -334,19 +438,18 @@ func (h *Host) findMatch(catchTypes ...int32) int32 {
 			break
 		}
 	}
-	if DebugThrow && len(catchTypes) == 0 {
+	if DebugThrow && len(catchTypes) == 0 && thrownType != 0 {
 		fmt.Fprintf(os.Stderr, "[exhost] findMatch thrown=%q candidates=NONE (catch-all/cleanup)\n",
-			h.cstrU32(h.abi.ReadU32(rec.typ+4)))
+			h.cstrU32(h.abi.ReadU32(thrownType+4)))
 	}
-	h.abi.Free(slot)
 
 	if !found {
 		// No candidate clause catches this type. Publish 0 so the wasm's
 		// id-compare fails and it takes __resumeException.
 		h.tempRet0 = 0
 		h.abi.TempretSet(0)
-		h.logf("__cxa_find_matching_catch NO MATCH (thrown typ=%d) -> resume", rec.typ)
-		return rec.exc
+		h.logf("__cxa_find_matching_catch NO MATCH (thrown typ=%d) -> resume", thrownType)
+		return exc
 	}
 
 	// Publish the MATCHED CATCH type's id (so it equals the wasm's
@@ -358,8 +461,8 @@ func (h *Host) findMatch(catchTypes ...int32) int32 {
 	h.tempRet0 = id
 	h.abi.TempretSet(id)
 	h.logf("__cxa_find_matching_catch matched catchType=%d -> exc=%d tempRet0=%d",
-		matchedType, rec.exc, id)
-	return rec.exc
+		matchedType, exc, id)
+	return exc
 }
 
 func (h *Host) X__cxa_find_matching_catch_2() int32         { return h.findMatch() }
@@ -379,22 +482,43 @@ func (h *Host) Xllvm_eh_typeid_for(typ int32) int32 {
 	return id
 }
 
-// X__cxa_begin_catch(ptr): enter a catch; the exception stops being uncaught.
-// Returns the adjusted object pointer (the wasm passes the header; the simple
-// path returns it unchanged, matching T1). (T1)
+// X__cxa_begin_catch(ptr): enter a catch handler — push onto the caught stack,
+// take a reference, and return the (base-class/pointer) adjusted object pointer
+// via the module's __cxa_get_exception_ptr (Emscripten's begin_catch verbatim).
 func (h *Host) X__cxa_begin_catch(ptr int32) int32 {
-	if h.uncaught > 0 {
-		h.uncaught--
+	if ptr == 0 {
+		h.logf("__cxa_begin_catch ptr=0")
+		return 0
 	}
+	if !h.hdrCaught(ptr) {
+		h.setHdrCaught(ptr, true)
+		if h.uncaught > 0 {
+			h.uncaught--
+		}
+	}
+	h.setHdrRethrown(ptr, false)
+	h.caught = append(h.caught, excRecord{exc: ptr, typ: h.hdrType(ptr)})
+	h.incRef(ptr)
 	h.logf("__cxa_begin_catch ptr=%d", ptr)
+	if adj := h.abi.GetExceptionPtr(ptr); adj != 0 {
+		return adj
+	}
 	return ptr
 }
 
-// X__cxa_end_catch(): leave the catch, popping the handled exception. (T1)
+// X__cxa_end_catch(): leave the catch handler — pop the CAUGHT stack (never the
+// in-flight exception: a `throw B` inside a `catch (A)` block reaches here with
+// B unwinding, and it is A's handler that ends), release the reference (the
+// module's decrement destroys the object at zero), and clear the threw flag +
+// exceptionLast like Emscripten. (T1)
 func (h *Host) X__cxa_end_catch() {
-	if n := len(h.inflight); n > 0 {
-		h.inflight = h.inflight[:n-1]
+	h.abi.SetThrew(0, 0)
+	if n := len(h.caught); n > 0 {
+		rec := h.caught[n-1]
+		h.caught = h.caught[:n-1]
+		h.decRef(rec.exc)
 	}
+	h.last = excRecord{}
 	h.logf("__cxa_end_catch")
 }
 
@@ -402,26 +526,31 @@ func (h *Host) X__cxa_end_catch() {
 // exceptions (std::uncaught_exceptions()).
 func (h *Host) X__cxa_uncaught_exceptions() int32 { return h.uncaught }
 
-// X__cxa_current_primary_exception returns the top in-flight exception object
-// (used by std::current_exception). Zero when none is active.
+// X__cxa_current_primary_exception returns the exception whose catch handler is
+// active, with a new reference (std::current_exception capturing into a
+// std::exception_ptr). Zero when no handler is active.
 func (h *Host) X__cxa_current_primary_exception() int32 {
-	rec, ok := h.top()
-	if !ok {
+	n := len(h.caught)
+	if n == 0 {
 		return 0
 	}
-	return rec.exc
+	exc := h.caught[n-1].exc
+	h.incRef(exc) // the exception_ptr's reference; released by its dtor in-module
+	return exc
 }
 
 // X__cxa_rethrow_primary_exception re-raises a captured primary exception
-// (std::rethrow_exception). A zero pointer is a no-op.
+// (std::rethrow_exception). The dynamic type is recovered from the in-memory
+// header written at __cxa_throw time — this is the path that used to lose it
+// and degrade typed DuckDB errors to catch(...). A zero pointer is a no-op.
 func (h *Host) X__cxa_rethrow_primary_exception(excPtr int32) {
 	if excPtr == 0 {
 		return
 	}
-	h.logf("__cxa_rethrow_primary_exception exc=%d", excPtr)
-	h.inflight = append(h.inflight, excRecord{exc: excPtr})
-	h.uncaught++
-	panic(thrownPanic{exc: excPtr})
+	h.logf("__cxa_rethrow_primary_exception exc=%d typ=%d", excPtr, h.hdrType(excPtr))
+	h.caught = append(h.caught, excRecord{exc: excPtr, typ: h.hdrType(excPtr)})
+	h.setHdrRethrown(excPtr, true)
+	h.X__cxa_rethrow()
 }
 
 // ---- tempRet0 register (imports, for builds that use them) ----------------

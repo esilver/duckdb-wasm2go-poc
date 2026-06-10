@@ -213,7 +213,7 @@ func (c *conn) prepareLocked(query string) (*stmt, error) {
 		// autocommit transaction dangling just like a failed execute does;
 		// restore autocommit so the next statement is not poisoned.
 		c.recoverTxLocked()
-		return nil, fmt.Errorf("duckdb prepare: %s", orUnknown(msg))
+		return nil, engineErr("prepare", msg)
 	}
 	return &stmt{c: c, handle: st, query: query}, nil
 }
@@ -521,7 +521,10 @@ func (s *stmt) execLocked(args []driver.NamedValue) (driver.Result, error) {
 	resPtr := mod.allocOut(sizeofDuckdbResult)
 	rc := mod.m.Xduckdb_execute_prepared(s.handle, resPtr)
 	if rc != 0 {
-		err := fmt.Errorf("duckdb execute: %s", orUnknown(mod.lastError()))
+		// Prefer duckdb_result_error: it carries DuckDB's own formatted message
+		// ("<Type> Error: <msg>" + the LINE/caret query context), exactly what
+		// the native runner matches against — surfaced verbatim, no prefix.
+		err := engineErr("execute", mod.resultError(resPtr))
 		mod.m.Xduckdb_destroy_result(resPtr)
 		mod.free(resPtr)
 		s.c.noteTxFailureLocked(s.query)
@@ -548,7 +551,8 @@ func (s *stmt) queryLocked(args []driver.NamedValue) (driver.Rows, error) {
 	resPtr := mod.allocOut(sizeofDuckdbResult)
 	rc := mod.m.Xduckdb_execute_prepared(s.handle, resPtr)
 	if rc != 0 {
-		err := fmt.Errorf("duckdb execute: %s", orUnknown(mod.lastError()))
+		// See execLocked: duckdb_result_error first, host fallback second.
+		err := engineErr("execute", mod.resultError(resPtr))
 		mod.m.Xduckdb_destroy_result(resPtr)
 		mod.free(resPtr)
 		s.c.noteTxFailureLocked(s.query)

@@ -216,8 +216,16 @@ type thrownPanic struct{ exc, typ int32 }
 func New(binder func(mod any) ModuleABI) *Host {
 	return &Host{
 		binder:   binder,
-		typeIDs:  map[int32]int32{},
-		nextType: 1,
+		typeIDs: map[int32]int32{},
+		// Real type ids start at 2: id 1 is RESERVED for the catch-all
+		// (typeinfo==0). With nextType=1 the FIRST typeinfo ever registered
+		// shared id 1 with catch-all, so a landing pad like
+		// `catch (InternalException &) { throw; } catch (...) { ... }`
+		// (ExpressionExecutor::TryEvaluateScalar) saw its catch-all match
+		// published as the InternalException clause id and RETHREW instead of
+		// entering catch(...) — surfacing internal overflow probes (stats
+		// max-min in CompressedMaterialization) as user-visible errors.
+		nextType: 2,
 	}
 }
 
@@ -266,7 +274,10 @@ func (h *Host) cstrU32(ptr int32) string {
 }
 
 // typeID maps a std::type_info pointer to a stable nonzero id. A zero typeinfo
-// (the "catch (...)" / unknown case) collapses to id 1 so a catch-all matches.
+// (the "catch (...)" / unknown case) collapses to the RESERVED id 1, which no
+// real typeinfo can receive (nextType starts at 2): the landing pad's typed
+// `tempRet0 == llvm_eh_typeid_for(T)` compares must all FAIL for a catch-all
+// match so control falls through to the catch(...) handler.
 func (h *Host) typeID(typeinfo int32) int32 {
 	if typeinfo == 0 {
 		return 1
@@ -406,6 +417,9 @@ func (h *Host) findMatch(catchTypes ...int32) int32 {
 
 	matchedType := int32(0)       // 0 typeinfo -> catch-all id (1)
 	found := len(catchTypes) == 0 // _2 (no candidates) is a catch-all
+	if DebugThrow && len(catchTypes) > 0 {
+		fmt.Fprintf(os.Stderr, "[exhost] findMatch ncand=%d cands=%v\n", len(catchTypes), catchTypes)
+	}
 
 	for _, ct := range catchTypes {
 		if ct == 0 {

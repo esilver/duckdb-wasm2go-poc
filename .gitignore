@@ -45,3 +45,4 @@ converge/duckdb_run_*
 converge/*.test
 converge/fstest/fstest
 converge/fstest/*.test
+__pycache__/

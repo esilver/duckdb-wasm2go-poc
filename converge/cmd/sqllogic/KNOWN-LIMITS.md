@@ -3,6 +3,13 @@
 Canonical root-cause analysis of every file still failing the upstream DuckDB
 sqllogictest corpus.
 
+> **Current canonical baseline (2026-06-10, post wasm-rebuild):
+> 2,513 PASS / 20 FAIL / 789 SKIP — 99.2 % pass rate excluding skips**
+> (`/tmp/sqllogic_wasmrebuild.txt`). The dated sections below are the
+> chronological fix log (2,309 → 2,489 → 2,493 → 2,502 → 2,505 → 2,513); the
+> itemized "remaining files" list below marks the 8 files the wasm rebuild
+> struck from the 28.
+
 **Provenance.** Corpus: `duckdb-src/test/sql` — 3,322 `.test` files
 (`.test_slow` excluded). Runner: `converge/cmd/sqllogic` (binary snapshot
 `/tmp/slt-salvage`), executed with cwd = `duckdb-src`, 30 s/file timeout.
@@ -182,20 +189,21 @@ the 31 (zero new failures). Tally: checkpoint-FATAL was the runner; the WAL
 append bug is OUR hand-written host-FS shim — the TRANSLATED engine C++ has
 still never been wrong.
 
-**The 28 remaining files** (first-failure symptom; the three checkpoint-FATAL
-files struck by the N fix above are removed):
+**The remaining files** (first-failure symptom; the three checkpoint-FATAL
+files struck by the N fix above are removed; the 8 entries marked
+~~struck~~ were fixed by the 2026-06-10 wasm rebuild, leaving **20**):
 
 - `test/sql/aggregate/aggregates/test_quantile_disc.test` — [wrong result] line 97
-- `test/sql/attach/attach_fsspec.test` — [unexpected error: IO Error: HostFileSystem: failed to open ? (errno #)] line 13
-- `test/sql/attach/attach_home_directory.test` — [statement error: message mismatch] line 20
+- ~~`test/sql/attach/attach_fsspec.test`~~ — struck 2026-06-10 (wasm rebuild: `file://` URLs)
+- ~~`test/sql/attach/attach_home_directory.test`~~ — struck 2026-06-10 (wasm rebuild: `~` expansion)
 - `test/sql/catalog/test_extension_suggestion.test` — [statement error: message mismatch] line 9
 - `test/sql/catalog/view/test_loosely_qualified_view_sql.test` — [hash mismatch] line 43
-- `test/sql/copy/csv/csv_home_directory.test` — [unexpected error: IO Error: No files found that match the pattern ?] line 17
+- ~~`test/sql/copy/csv/csv_home_directory.test`~~ — struck 2026-06-10 (wasm rebuild: `~` expansion)
 - `test/sql/copy/csv/glob/read_csv_glob.test` — [wrong result] line 211
 - `test/sql/copy/csv/rejects/csv_rejects_read.test` — [wrong row count] line 238
 - `test/sql/copy/csv/test_timestamptz_12926.test` — [statement error: expected error, got success] line 8
 - `test/sql/error/error_position.test` — [statement error: message mismatch] line 9
-- `test/sql/extensions/allowed_directories_install.test` — [statement error: message mismatch] line 15
+- ~~`test/sql/extensions/allowed_directories_install.test`~~ — struck 2026-06-10 (wasm rebuild: HOME-only WASI environ)
 - `test/sql/function/generic/test_sleep.test` — [unexpected error: Invalid Input Error: ThreadUtil::SleepMs requires DuckDB to be compiled with thre] line 6
 - `test/sql/json/issues/read_json_memory_usage.test` — [statement error: expected error, got success] line 25
 - `test/sql/json/test_json_serialize_plan.test` — [wrong result] line 10
@@ -204,11 +212,11 @@ files struck by the N fix above are removed):
 - `test/sql/logging/logging_types.test` — [wrong row count] line 15
 - `test/sql/optimizer/predicate_factoring.test` — [wrong result] line 92
 - `test/sql/sample/test_sample_too_big.test` — [unexpected error: Out of Memory Error: Allocation failure] line 28
-- `test/sql/secrets/create_secret_expression.test` — [unexpected error: IO Error: Failed to initialize persistent storage directory. (original] line 21
+- ~~`test/sql/secrets/create_secret_expression.test`~~ — struck 2026-06-10 (wasm rebuild: persistent secrets / mkdirat+stat64)
 - `test/sql/settings/errors_as_json.test` — [statement error: message mismatch] line 11
-- `test/sql/settings/test_disabled_file_systems.test` — [statement error: expected error, got success] line 37
-- `test/sql/settings/test_disabled_local_filesystem_metadata.test` — [statement error: expected error, got success] line 22
-- `test/sql/storage/wal/wal_promote_version.test` — [unexpected error: Catalog Error: Table with name T does not exist!] line 32 — root-caused (host_fs.cpp APPEND), fix pending wasm rebuild
+- ~~`test/sql/settings/test_disabled_file_systems.test`~~ — struck 2026-06-10 (wasm rebuild: disabled_filesystems enforcement)
+- ~~`test/sql/settings/test_disabled_local_filesystem_metadata.test`~~ — struck 2026-06-10 (wasm rebuild: same enforcement)
+- ~~`test/sql/storage/wal/wal_promote_version.test`~~ — struck 2026-06-10 (wasm rebuild: host_fs.cpp FILE_FLAGS_APPEND fix landed)
 - `test/sql/timezone/disable_timestamptz_casts.test` — [unexpected error: Binder Error: Casting from TIMESTAMP to TIMESTAMP WITH TIME ZONE without a] line 22
 - `test/sql/timezone/test_icu_calendar.test` — [wrong result] line 110
 - `test/sql/types/timestamp/test_timestamp_tz.test` — [statement error: expected error, got success] line 24
@@ -240,9 +248,10 @@ records that would hit other buckets.
 > **Note (2026-06-10):** this table and the appendix below describe the
 > original 224-failure baseline and are kept as the classification record.
 > Buckets A–H, P and Q were since fixed (see the tail-sweep and `set seed`
-> updates at the top of this document). **The canonical list of the 40 files
-> still failing today is the itemized list in that update section**; the live
-> report is `/tmp/sqllogic_iejoin_full.txt`.
+> updates at the top of this document). **The canonical list of the 20 files
+> still failing today is the itemized "remaining files" list above** (the
+> 28-file list with the 8 wasm-rebuild strikes); the live report is
+> `/tmp/sqllogic_wasmrebuild.txt`.
 
 | # | Bucket | Files | Root cause | Fixability | Example |
 |---|--------|------:|------------|------------|---------|

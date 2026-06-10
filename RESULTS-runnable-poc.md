@@ -104,6 +104,16 @@ limits, not tuning:
 
 So this delivers pure-Go DuckDB **semantics**, not DuckDB **speed**.
 
+> **Addendum (2026-06-10): the first structural limit fell.** "Benchmark
+> levers are exhausted" was true for the monolithic `-N -l` genpkg, but the
+> genopt pipeline (`GENOPT=1 ./rebuild_fs_all.sh`: package sharding via
+> `scripts/transform_genopt.py` + giant-function splitting via
+> `scripts/split_giant_fns.py`) now compiles the engine **fully optimized** —
+> no `-N`, no `-l`, no OOM (0.4–3.4 GB peak per package) — for a **2.3–2.9×**
+> speedup over the `-N -l` build measured here, and makes `GOOS=js` builds
+> possible. Only the SIMD limit remains structural. See the Performance
+> section of [README.md](README.md); ships as `duckdb-go-pure` v0.3.x.
+
 ## Error messages (was a limitation — resolved)
 
 `duckdb_result_error` returns null on a failed query: DuckDB's internal error

@@ -4,6 +4,15 @@
 **Engine (READ-ONLY):** `/Users/elisilver/workspace/duckdb-wasm2go-poc/converge/duckdb` — pure-Go DuckDB v1.5.3 transpiled by wasm2go; working `database/sql/driver` (driver.go/result.go/module.go) + proven scalar & aggregate UDF callback mechanism (udf_test.go, udf_agg_test.go both PASS).
 
 > **Scope note.** This document is a blueprint synthesized from four dependency-surface catalogs. All `file:line` citations into `/tmp/gsx-duckdb` and `converge/duckdb` were spot-verified against the live trees while writing. No repo is modified by this document.
+>
+> **Outcome note (2026-06-10).** This blueprint was executed and the plan
+> worked: the swap landed as `converge/duckdbcompat` + the
+> `pure-go-duckdb-backend` branches, and the actual conformance run delivered
+> **986 PASS / 0 FAIL / 8 SKIP of 994 specs** — exceeding the cgo baseline
+> (972/14/8); see the Results section of [README.md](README.md). The tier
+> tables below were pre-run estimates. Paths like `/tmp/gsx-duckdb` are
+> machine-local snapshot references from the writing session, not links a
+> repo visitor can follow.
 
 ---
 
@@ -202,7 +211,7 @@ Faithful row-producing table functions (`duckdb_create_table_function` + bind/in
 | T3 | 2 table UDFs + spatial | ~95%+ | 1-2 |
 | **Total** | | | **~14-23 days** |
 
-(Conformance figures are estimates pending an actual test-suite run; calibrate after T0.)
+(These conformance figures were pre-run estimates. The actual run, after all tiers landed, delivered **986/994 with zero failures** — see the Outcome note at the top.)
 
 ---
 

@@ -8,24 +8,30 @@ Oversized functions are also why the genopt shards need '-l' (inliner IR
 explosion >50GB). This transform splits any function over a line threshold
 into semantically identical part-functions.
 
-Shape of the input (verified by census on Fn6568, 2026-06-10):
+Shape of the input (verified by census on all 30 >8k-line functions, 2026-06-10):
 - ALL control flow is goto-based: zero `for` loops; nested bare `{}` blocks
-  (wasm block scopes), `if cond {` bodies (wasm if, NO else anywhere), and
-  atomic `switch expr { case N: goto lX ... }` dispatch (br_table). Labels
-  `lN:` appear in bare blocks and inside if-bodies, never under a switch.
+  (wasm block scopes), `if cond {` bodies with optional plain `} else {`
+  branches (never `else if`), and atomic `switch expr { case N: goto lX }`
+  dispatch (br_table). Labels `lN:` appear in bare blocks and inside
+  if/else bodies, never under a switch.
 - Every declared name is unique (no shadowing). `tN`/`TN` := temporaries
-  never live across a label; `var pN T` / the top `var vN... T` block do.
+  never live across a label EXCEPT `tN := <local>` snapshot copies (hoisted
+  with inferred types); `var pN T` / the top `var vN... T` block do.
 
 Transform (per oversized function):
 1. Parse the body into a tree; assert the grammar above (skip + warn loudly
    on any violation — correctness over coverage).
 2. Flatten: splice bare blocks; an `if cond {B}` whose B contains a label
-   becomes `if !(cond) { goto xlK }` + flatten(B) + `xlK:`. Label-free ifs
-   and switches stay atomic (their internal goto LINES are still rewritten).
+   becomes `if !(cond) { goto xlK }` + flatten(B) + `xlK:` (else branches
+   lower to the two-label diamond). Label-free ifs and switches stay atomic
+   (their internal goto LINES are still rewritten).
 3. Hoist params + all var-declared locals into `type <fn>Locals struct`
-   (refs rewritten to l.<name>); `:=` temporaries stay local — each label
-   segment is wrapped in a labeled bare block `lN: { ... }`, which scopes
-   them so top-level gotos never jump over a declaration.
+   (refs rewritten to l.<name>), REPLACING every relocated declaration with
+   explicit zero-assignments in place — `var x T` re-zeroes each time
+   control re-enters it, and dropping that re-init miscompiles (see
+   collect_vars). `:=` temporaries stay local — each label segment is
+   wrapped in a labeled bare block `lN: { ... }`, which scopes them so
+   top-level gotos never jump over a declaration.
 4. Greedy-pack consecutive segments into part funcs
    `func <fn>_part_K(m *Module, l *<fn>Locals, entry int) int` with an
    entry-dispatch switch (goto into the labeled blocks). Segment label ids

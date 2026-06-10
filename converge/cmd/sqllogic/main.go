@@ -66,6 +66,7 @@ const (
 	recMode    // mode skip / unskip
 	recHalt
 	recSleep
+	recResetLabel // reset label <name>: forget the stored hash for a label
 )
 
 type condition struct {
@@ -163,7 +164,7 @@ func main() {
 		rows, err := db.Query(*flagProbe)
 		if err != nil {
 			fmt.Printf("raw error: %q\n", err.Error())
-			fmt.Printf("decoded:   %q\n", decodeEngineError(err.Error()))
+			fmt.Printf("decoded:   %q\n", err.Error())
 			return
 		}
 		cols, _ := rows.Columns()
@@ -473,8 +474,14 @@ func parseFile(path string) ([]record, error) {
 		case "set", "reset", "tags", "test_env", "hash-threshold", "continue":
 			// "set seed <v>" seeds the RNG so random()-dependent expected values
 			// reproduce (duckdb's runner translates it to SELECT SETSEED(<v>)).
-			// Everything else is ignored (safe / not applicable to a fresh
-			// in-memory engine per file).
+			// "reset label <name>" forgets a stored label hash (upstream's
+			// ResetLabel command). Everything else is ignored (safe / not
+			// applicable to a fresh in-memory engine per file).
+			if tok == "reset" && len(args) == 2 && strings.EqualFold(args[0], "label") {
+				appendRec(record{kind: recResetLabel, line: lineNo, label: args[1]})
+				p.pos++
+				continue
+			}
 			if tok == "set" && len(args) == 2 && args[0] == "seed" {
 				if _, err := strconv.ParseFloat(args[1], 64); err == nil {
 					appendRec(record{
@@ -600,10 +607,45 @@ func checkRequire(args []string) string {
 			return ""
 		}
 		return "require block_size " + strings.Join(args[1:], " ")
-	case "ram", "disk_space":
+	case "ram":
+		// Upstream compares the requirement against the memory available to
+		// the ENGINE (FileSystem::GetAvailableMemory). Our engine is a wasm32
+		// module: its linear memory can never exceed the 4 GiB address space
+		// (and the runner caps it at 512MB), so requirements above that are
+		// MISSING and the file skips — exactly what upstream does on a small
+		// machine.
+		if len(args) >= 2 {
+			if gb := parseRamGB(args[1]); gb > 4 {
+				return "require ram " + strings.Join(args[1:], " ") + " (wasm32 4GiB ceiling)"
+			}
+		}
+		return ""
+	case "disk_space":
 		return "" // host has plenty
 	}
 	return "require " + param
+}
+
+// parseRamGB parses a "require ram" size argument ("16gb", "8GB", "500mb")
+// into (possibly fractional, rounded-down) whole GiB; 0 when unparseable.
+func parseRamGB(s string) float64 {
+	t := strings.ToLower(strings.TrimSpace(s))
+	mult := 0.0
+	switch {
+	case strings.HasSuffix(t, "gb"):
+		mult, t = 1, t[:len(t)-2]
+	case strings.HasSuffix(t, "mb"):
+		mult, t = 1.0/1024, t[:len(t)-2]
+	case strings.HasSuffix(t, "tb"):
+		mult, t = 1024, t[:len(t)-2]
+	default:
+		return 0
+	}
+	v, err := strconv.ParseFloat(strings.TrimSpace(t), 64)
+	if err != nil {
+		return 0
+	}
+	return v * mult
 }
 
 // expandForeachTokens expands <integral> etc. (sqllogic_test_runner.cpp
@@ -675,7 +717,7 @@ type execState struct {
 	testName    string
 	testUUID    string
 	tz          *time.Location // session TimeZone (tracked from successful SET TimeZone)
-	hybridCal   bool           // non-default SET Calendar active (ICU hybrid Julian/Gregorian TZ rendering)
+	calendar    string         // non-default SET Calendar name ("" = gregorian default)
 
 	recRun        int
 	recPassed     int
@@ -686,13 +728,14 @@ type execState struct {
 type sub struct{ name, val string }
 
 // renderCtx carries the session state value rendering depends on: the
-// TimeZone for TIMESTAMPTZ and whether a non-default ICU Calendar is active.
+// TimeZone for TIMESTAMPTZ and which non-default ICU Calendar is active
+// (cal == "" means the default proleptic-Gregorian cast).
 type renderCtx struct {
-	tz        *time.Location
-	hybridCal bool
+	tz  *time.Location
+	cal string
 }
 
-func (st *execState) rctx() renderCtx { return renderCtx{st.tz, st.hybridCal} }
+func (st *execState) rctx() renderCtx { return renderCtx{st.tz, st.calendar} }
 
 func executeFile(path string) fileResult {
 	recs, err := parseFile(path)
@@ -770,6 +813,11 @@ func (st *execState) execRecords(recs []record, subs []sub) error {
 			return haltStop{}
 		case recSleep:
 			time.Sleep(r.sleepDur)
+		case recResetLabel:
+			// Upstream's ResetLabel command (sqllogic_test_runner.cpp): forget
+			// the label's stored hash so foreach iterations with different
+			// results can reuse the same label.
+			delete(st.labelHashes, r.label)
 		case recLoop:
 			for v := r.loopStart; v < r.loopEnd; v++ {
 				err := st.execRecords(r.body, append(subs, sub{r.loopVar, strconv.Itoa(v)}))
@@ -1058,12 +1106,15 @@ func (st *execState) execStatement(r *record, subs []sub) error {
 			st.tz = nil
 		}
 		if m := setCalendarRe.FindStringSubmatch(sqlText); m != nil {
-			st.hybridCal = m[1] != "" && !strings.EqualFold(m[1], "gregorian")
+			st.calendar = strings.ToLower(m[1])
+			if strings.EqualFold(m[1], "gregorian") {
+				st.calendar = ""
+			}
 		}
 	}
 	var errMsg string
 	if rawErr != nil {
-		errMsg = decodeEngineError(rawErr.Error())
+		errMsg = rawErr.Error()
 	}
 
 	// Work around an ENGINE/DRIVER issue: a failed statement leaves the
@@ -1132,30 +1183,6 @@ func (st *execState) trackTxn(connName, stmt string) {
 	case strings.HasPrefix(upper, "COMMIT") || strings.HasPrefix(upper, "ROLLBACK") || strings.HasPrefix(upper, "ABORT"):
 		st.inTxn[connName] = false
 	}
-}
-
-var jsonFieldRes = map[string]*regexp.Regexp{}
-var jsonFieldMu sync.Mutex
-
-// extractJSONField pulls one string field out of (possibly truncated/invalid)
-// JSON and unescapes it best-effort.
-func extractJSONField(payload, field string) string {
-	jsonFieldMu.Lock()
-	re := jsonFieldRes[field]
-	if re == nil {
-		re = regexp.MustCompile(`"` + field + `"\s*:\s*"((?:[^"\\]|\\.)*)"`)
-		jsonFieldRes[field] = re
-	}
-	jsonFieldMu.Unlock()
-	m := re.FindStringSubmatch(payload)
-	if m == nil {
-		return ""
-	}
-	var s string
-	if err := json.Unmarshal([]byte(`"`+m[1]+`"`), &s); err != nil {
-		return strings.NewReplacer(`\"`, `"`, `\n`, "\n", `\t`, "\t", `\\`, `\`).Replace(m[1])
-	}
-	return s
 }
 
 // splitStatements splits a SQL batch on top-level semicolons, respecting
@@ -1278,49 +1305,6 @@ func stripLeadingComments(s string) string {
 	}
 }
 
-// decodeEngineError renders the driver's error the way DuckDB's own test
-// runner sees it. The pure-Go driver surfaces the raw C++ exception as JSON
-// ({"exception_type":"Binder","exception_message":"..."}); DuckDB renders that
-// as "Binder Error: ...". This is purely error-FORMAT normalization so that
-// the corpus' expected-error substrings/regexes are matched against the same
-// text the C++ runner matches against.
-func decodeEngineError(msg string) string {
-	prefix := ""
-	rest := msg
-	for _, p := range []string{"duckdb prepare: ", "duckdb execute: ", "duckdb bind param "} {
-		if i := strings.Index(rest, p); i >= 0 {
-			prefix = rest[:i]
-			rest = rest[i+len(p):]
-			break
-		}
-	}
-	j := strings.Index(rest, "{")
-	if j < 0 {
-		return msg
-	}
-	var exc struct {
-		Type     string `json:"exception_type"`
-		Message  string `json:"exception_message"`
-		Position string `json:"position"`
-	}
-	payload := rest[j:]
-	if err := json.Unmarshal([]byte(payload), &exc); err != nil {
-		// The host truncates long throw messages, leaving unterminated JSON,
-		// and raw control chars may appear inside strings. Fall back to
-		// field extraction by regex.
-		exc.Type = extractJSONField(payload, "exception_type")
-		exc.Message = extractJSONField(payload, "exception_message")
-	}
-	if exc.Type == "" {
-		return msg
-	}
-	cls := exc.Type
-	if !strings.Contains(cls, "Error") {
-		cls += " Error"
-	}
-	return prefix + rest[:j] + cls + ": " + exc.Message
-}
-
 func isInternalError(msg string) bool {
 	return strings.Contains(msg, "INTERNAL Error") || strings.Contains(msg, "FATAL Error")
 }
@@ -1360,7 +1344,7 @@ func (st *execState) execQuery(r *record, subs []sub) error {
 	}
 	for _, pre := range segs[:len(segs)-1] {
 		if _, err := conn.ExecContext(noCtx, pre); err != nil {
-			msg := decodeEngineError(err.Error())
+			msg := err.Error()
 			if isInternalError(msg) {
 				return failStop{failInternal, snip(pre) + "\n=> " + msg, r.line}
 			}
@@ -1370,7 +1354,7 @@ func (st *execState) execQuery(r *record, subs []sub) error {
 	}
 	rows, qErr := conn.QueryContext(noCtx, segs[len(segs)-1])
 	if qErr != nil {
-		msg := decodeEngineError(qErr.Error())
+		msg := qErr.Error()
 		if isInternalError(msg) {
 			return failStop{failInternal, snip(sqlText) + "\n=> " + msg, r.line}
 		}
@@ -1406,7 +1390,7 @@ func (st *execState) execQuery(r *record, subs []sub) error {
 	closeErr := rows.Err()
 	rows.Close()
 	if closeErr != nil {
-		msg := decodeEngineError(closeErr.Error())
+		msg := closeErr.Error()
 		if isInternalError(msg) {
 			return failStop{failInternal, snip(sqlText) + "\n=> " + msg, r.line}
 		}
@@ -1491,10 +1475,15 @@ func (st *execState) execQuery(r *record, subs []sub) error {
 	}
 	sortedVals := resultVals
 	if r.sortStyle != "" {
-		// sort actual (values+strings together) and expected the same way
+		// Sort the ACTUAL result only (values+strings together). Upstream's
+		// runner never sorts the expected block (result_helper.cpp
+		// CheckQueryResult: SortQueryResult applies to result_values_string
+		// alone) — expected blocks are WRITTEN in converted-sorted order
+		// ("1"/"0" booleans), so sorting them too diverges whenever the
+		// expected spelling sorts differently than the converted actual
+		// (e.g. "True" vs "1" in test_null_type_propagation).
 		sortedVals = append([]any(nil), resultVals...)
 		applySortVals(r.sortStyle, actStrs, sortedVals, ncols)
-		applySort(r.sortStyle, expValues, ncols)
 	}
 
 	for i := range expValues {
@@ -1845,10 +1834,16 @@ func valueToString(v any, t *colType, rc renderCtx) string {
 	case nil:
 		return "NULL"
 	case bool:
+		// Top-level BOOLEAN cells convert to "1"/"0" like the C++ runner
+		// (result_helper.cpp SQLLogicTestConvertValue) — this string feeds
+		// rowsort/valuesort ordering and result hashing, so "true"/"false"
+		// here corrupted sort order and md5 hashes. Booleans NESTED inside
+		// containers still render "true"/"false" (the VARCHAR cast,
+		// nestedToString).
 		if x {
-			return "true"
+			return "1"
 		}
-		return "false"
+		return "0"
 	case int64:
 		return strconv.FormatInt(x, 10)
 	case float64:
@@ -1858,6 +1853,13 @@ func valueToString(v any, t *colType, rc renderCtx) string {
 			return "(empty)"
 		}
 		return strings.ReplaceAll(x, "\x00", "\\0")
+	case duckdb.JSONValue:
+		// JSON result cells arrive as the RAW JSON text (duckdb renders JSON
+		// columns verbatim); \0 sanitization like plain strings.
+		if string(x) == "" {
+			return "(empty)"
+		}
+		return strings.ReplaceAll(string(x), "\x00", "\\0")
 	case []byte:
 		// BLOB: rendered like DuckDB's BLOB->VARCHAR cast (Blob::ToString,
 		// src/common/types/blob.cpp): printable ASCII except \ ' " stays,
@@ -2054,11 +2056,19 @@ func formatTemporal(x time.Time, t *colType, rc renderCtx) string {
 		}
 		lx := x.In(tz)
 		ymd := formatYMD(lx)
-		if rc.hybridCal {
-			// A non-default SET Calendar routes the engine's TIMESTAMPTZ ->
-			// VARCHAR cast through ICU, whose calendars are hybrid
-			// Julian/Gregorian (pre-1582 instants render as Julian dates).
+		switch rc.cal {
+		case "":
 			// The default cast is proleptic Gregorian (test_infinite_time).
+		case "indian":
+			// ICU's IndianCalendar (civil Saka): year = gregorian-78,
+			// year starts at gregorian day-of-year 80; computed over the
+			// PROLEPTIC Gregorian fields (ICU Grego:: helpers).
+			ymd = formatYMDIndian(lx)
+		default:
+			// Any other non-default SET Calendar routes the engine's
+			// TIMESTAMPTZ -> VARCHAR cast through ICU, whose calendars are
+			// hybrid Julian/Gregorian (pre-1582 instants render as Julian
+			// dates) — correct for 'japanese' and the other hybrid ones.
 			ymd = formatYMDHybrid(lx)
 		}
 		return ymd + " " + lx.Format("15:04:05") + fracStr(lx) + offsetSuffix(lx)
@@ -2210,6 +2220,60 @@ func formatYMDHybrid(t time.Time) string {
 		return fmt.Sprintf("%04d-%02d-%02d (BC)", 1-year, month, day)
 	}
 	return fmt.Sprintf("%04d-%02d-%02d", year, month, day)
+}
+
+// formatYMDIndian renders the date part the way ICU's IndianCalendar does
+// (icu indiancalendar.cpp handleComputeFields): the civil Saka calendar,
+// computed from the PROLEPTIC Gregorian date (ICU's Grego:: helpers are
+// proleptic): Saka year = gregorian year - 78, starting at gregorian
+// day-of-year 80 (1-based: day 81); month 1 has 30 days (31 in a Gregorian
+// leap year), months 2-6 have 31 days, months 7-12 have 30.
+func formatYMDIndian(t time.Time) string {
+	gy, _, _ := t.Date()
+	year := int64(gy) - 78
+	yday := int64(t.YearDay() - 1) // 0-based Gregorian day of year
+	const indianYearStart = 80
+	var leapMonth int64
+	if yday < indianYearStart {
+		year--
+		leapMonth = 30
+		if isGregorianLeap(int64(gy) - 1) {
+			leapMonth = 31
+		}
+		yday += leapMonth + 31*5 + 30*3 + 10
+	} else {
+		leapMonth = 30
+		if isGregorianLeap(int64(gy)) {
+			leapMonth = 31
+		}
+		yday -= indianYearStart
+	}
+	var month, day int64
+	if yday < leapMonth {
+		month = 1
+		day = yday + 1
+	} else {
+		mday := yday - leapMonth
+		if mday < 31*5 {
+			month = mday/31 + 2
+			day = mday%31 + 1
+		} else {
+			mday -= 31 * 5
+			month = mday/30 + 7
+			day = mday%30 + 1
+		}
+	}
+	if year <= 0 {
+		return fmt.Sprintf("%04d-%02d-%02d (BC)", 1-year, month, day)
+	}
+	return fmt.Sprintf("%04d-%02d-%02d", year, month, day)
+}
+
+// isGregorianLeap is the proleptic Gregorian leap rule over astronomical years
+// (floor semantics for negatives).
+func isGregorianLeap(y int64) bool {
+	mod := func(a, b int64) int64 { return ((a % b) + b) % b }
+	return mod(y, 4) == 0 && (mod(y, 100) != 0 || mod(y, 400) == 0)
 }
 
 func floorDiv(a, b int64) int64 {
@@ -2398,7 +2462,7 @@ func compareValue(actual any, actualStr, expected string, rc renderCtx) bool {
 	// JSON, compare structurally.
 	if len(expTrim) > 0 && (expTrim[0] == '{' || expTrim[0] == '[' || expTrim[0] == '"') {
 		switch actual.(type) {
-		case string, map[string]any, []any:
+		case string, map[string]any, []any, duckdb.JSONValue:
 			if jsonEquivalent(actual, expTrim) {
 				return true
 			}
@@ -2414,6 +2478,14 @@ func jsonEquivalent(actual any, expected string) bool {
 	var expVal any
 	if err := json.Unmarshal([]byte(expected), &expVal); err != nil {
 		return false
+	}
+	if jv, ok := actual.(duckdb.JSONValue); ok {
+		// Raw JSON text: parse it rather than marshalling the wrapper string.
+		var actVal any
+		if err := json.Unmarshal([]byte(jv), &actVal); err != nil {
+			return false
+		}
+		return reflect.DeepEqual(actVal, expVal)
 	}
 	actBytes, err := json.Marshal(actual)
 	if err != nil {

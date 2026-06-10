@@ -414,10 +414,27 @@ func (r *rows) decode(col int, dataPtr int32, row int) driver.Value {
 	case dtVarchar:
 		s, _ := readStringT(mod, dataPtr+int32(row*16))
 		if r.colJSON[col] {
-			// JSON column: deliver the parsed native value (duckdb-go semantics).
-			return DecodeJSONNative(s)
+			// JSON column: deliver the RAW JSON text, type-marked. DuckDB
+			// renders JSON result cells verbatim (the VARCHAR cast is the
+			// identity), and object KEY ORDER is meaningful to consumers
+			// (json_serialize_plan regexes) — parsing into Go maps loses it.
+			// Callers that want duckdb-go's parsed-native semantics apply
+			// DecodeJSONNative themselves (the duckdbcompat layer does for
+			// UDF arguments).
+			return JSONValue(s)
 		}
 		return s
+	case dtInvalid:
+		// The C API maps LogicalTypeId::TYPE (results of get_type/make_type)
+		// to DUCKDB_TYPE_INVALID. TYPE cells are VARCHAR-physical blobs
+		// holding a BinarySerializer-encoded LogicalType; render them like
+		// the engine's TYPE -> VARCHAR cast (LogicalType::ToString). Cells
+		// that do not decode deliver nil (the previous behavior for unknown
+		// type ids).
+		if s, ok := readTypeCell(mod, dataPtr+int32(row*16)); ok {
+			return s
+		}
+		return nil
 	case dtEnum:
 		// ENUM cells are dictionary INDEXES (uint8/16/32 per the enum's size),
 		// not string_t — decode the index and look up the dictionary string.
@@ -472,9 +489,6 @@ func (r *rows) decode(col int, dataPtr int32, row int) driver.Value {
 		// (Geometry::ToString).
 		_, b := readStringT(mod, dataPtr+int32(row*16))
 		return geometryString(b)
-
-	case dtInvalid:
-		return nil
 
 	default:
 		// Unsupported type id: don't guess a width. Return nil rather than read

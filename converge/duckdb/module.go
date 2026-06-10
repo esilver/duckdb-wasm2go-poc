@@ -159,8 +159,12 @@ func (mod *module) inject(fn any) int32 {
 
 // lastError returns the message of the most recent C++ exception (DuckDB's
 // convert-and-rethrow loses it from duckdb_result_error; we recover it from the
-// host). Returns "" if none.
-func (mod *module) lastError() string { return mod.e.Host.LastThrowMessage() }
+// host). The host sees the raw TRANSPORT JSON of the throw; it is rendered
+// native-shaped here (decodeExceptionJSON) so callers never have to tell it
+// apart from the engine's intended errors_as_json output. Returns "" if none.
+func (mod *module) lastError() string {
+	return decodeExceptionJSON(mod.e.Host.LastThrowMessage())
+}
 
 // resultError returns the error text of a failed duckdb_result — the SAME
 // formatted message native DuckDB surfaces ("<Type> Error: <message>" plus the

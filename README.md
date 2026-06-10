@@ -33,7 +33,7 @@ proto/graph features with no assertable cases. See
 
 | Metric | Result |
 |---|---|
-| Test files | **2,513 PASS / 20 FAIL / 789 SKIP** of 3,322 — **99.2% pass rate excluding skips** (2026-06-10) |
+| Test files | **2,522 PASS / 9 FAIL / 791 SKIP** of 3,322 — **99.6% pass rate excluding skips** (2026-06-10, every remaining failure a documented permanent exclusion) |
 | Skips | unsupported test *directives* (`load` restart protocol, `require parquet/tpch/httpfs/...`), not engine failures |
 
 Measured with the runner committed in this repo at

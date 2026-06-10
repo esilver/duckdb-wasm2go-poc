@@ -34,6 +34,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -817,7 +818,7 @@ var dataDir = func() string {
 // condsPass evaluates skipif/onlyif conditions after loop substitution.
 func (st *execState) condsPass(conds []condition, subs []sub) bool {
 	for _, c := range conds {
-		v := evalCond(st.substitute(c.expr, subs))
+		v := evalCond(substituteBareLoopVars(st.substitute(c.expr, subs), subs))
 		if c.skipIf && v {
 			return false
 		}
@@ -826,6 +827,41 @@ func (st *execState) condsPass(conds []condition, subs []sub) bool {
 		}
 	}
 	return true
+}
+
+// substituteBareLoopVars replaces condition operands that exactly match a
+// loop-variable name with its value, mirroring duckdb's CheckLoopCondition:
+// `onlyif compression=dict_fsst` inside `foreach compression ...` compares the
+// VARIABLE's value, not the literal word "compression". Only whole operands
+// are replaced (split on && and the comparison operator), never substrings.
+func substituteBareLoopVars(expr string, subs []sub) string {
+	if len(subs) == 0 {
+		return expr
+	}
+	terms := strings.Split(expr, "&&")
+	for ti, term := range terms {
+		op, i := "", -1
+		for _, cand := range condOps {
+			if j := strings.Index(term, cand); j >= 0 {
+				op, i = cand, j
+				break
+			}
+		}
+		if i < 0 {
+			continue
+		}
+		l, r := term[:i], term[i+len(op):]
+		for _, sb := range subs {
+			if strings.TrimSpace(l) == sb.name {
+				l = sb.val
+			}
+			if strings.TrimSpace(r) == sb.name {
+				r = sb.val
+			}
+		}
+		terms[ti] = l + op + r
+	}
+	return strings.Join(terms, "&&")
 }
 
 var condOps = []string{"<>", ">=", "<=", "=", ">", "<"}
@@ -1742,7 +1778,18 @@ func compareValue(actual any, actualStr, expected string, tz *time.Location) boo
 		return false
 	case float64:
 		if ef, err := strconv.ParseFloat(expTrim, 64); err == nil {
-			return approxEqual(x, ef)
+			if approxEqual(x, ef) {
+				return true
+			}
+			// FLOAT columns arrive widened to float64 (the driver has no
+			// float32 carrier), while the C++ runner casts the expected string
+			// to the COLUMN type before comparing. Accept the 32-bit reading
+			// too: e.g. uhugeint_max::FLOAT is +Inf (f32 demote of 2^128-1),
+			// and ParseFloat(expected, 32) overflows to +Inf, matching native.
+			if ef32, err32 := strconv.ParseFloat(expTrim, 32); err32 == nil || errors.Is(err32, strconv.ErrRange) {
+				return approxEqual(float64(float32(x)), ef32)
+			}
+			return false
 		}
 		if strings.EqualFold(expTrim, "nan") {
 			return math.IsNaN(x)

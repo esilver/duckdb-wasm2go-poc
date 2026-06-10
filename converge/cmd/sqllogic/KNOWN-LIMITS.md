@@ -56,12 +56,25 @@ failures) and all engine-side:
   (`SET Calendar='indian'/'islamic-umalqura'`) would require reimplementing
   those ICU calendars in the runner; the japanese (hybrid) rows now match.
 
+**2026-06-10 `set seed` fix.** The "IEJoin nondeterministic wrong results"
+(bucket R's headline correctness bug) and all of bucket Q were OUR RUNNER, not
+the engine: the parser lumped `set` into the ignored directives, so
+`set seed <v>` was silently dropped and `random()` ran unseeded — wrong,
+flickering data in every seed-dependent test. DuckDB's runner translates the
+directive to `SELECT SETSEED(<v>)` (`sqllogic_test_runner.cpp:1016`); ours now
+does the same. The engine's RNG is bit-identical to native after SETSEED
+(probe reproduces upstream's exact `252652/29774/17657/…` row, 3/3 runs;
+the two iejoin files 50/50 green in a loop at `-j 1` and `-j 4`). Fixes 4
+files: `iejoin_projection_maps`, `test_iejoin_events` (R — there is NO IEJoin
+engine bug), `set_seed_for_sample`, `test_volatile_independence` (all of Q).
+New baseline: **2,493 PASS / 40 FAIL**.
+
 Everything else still failing is engine-side and keeps its classification
-below (I, J, K remnants, N, O, Q, R singles, A remnants:
+below (I, J, K remnants, N, O, R singles, A remnants:
 `read_csv_glob` relative `glob('*/*.csv')` count and `csv_rejects_read`
 rejects-table row count, plus M remnants logging_csv/logging_types).
 
-**The 44 remaining files** (first-failure symptom):
+**The 40 remaining files** (first-failure symptom):
 
 - `test/sql/aggregate/aggregates/test_null_aggregates.test` — [unexpected error: Invalid Error: Unoptimized statement differs from original result!] line 314
 - `test/sql/aggregate/aggregates/test_quantile_disc.test` — [wrong result] line 97
@@ -76,10 +89,7 @@ rejects-table row count, plus M remnants logging_csv/logging_types).
 - `test/sql/error/error_position.test` — [statement error: message mismatch] line 9
 - `test/sql/extensions/allowed_directories_install.test` — [statement error: message mismatch] line 15
 - `test/sql/function/generic/test_sleep.test` — [unexpected error: Invalid Input Error: ThreadUtil::SleepMs requires DuckDB to be compiled with thre] line 6
-- `test/sql/function/numeric/set_seed_for_sample.test` — [hash mismatch] line 16
 - `test/sql/function/operator/test_in_empty_table.test` — [unexpected error: Conversion Error: Could not convert string ? to INT#] line 8
-- `test/sql/join/iejoin/iejoin_projection_maps.test` — [wrong result] line 23
-- `test/sql/join/iejoin/test_iejoin_events.test` — [wrong result] line 48
 - `test/sql/json/issues/read_json_memory_usage.test` — [statement error: expected error, got success] line 25
 - `test/sql/json/test_json_serialize_plan.test` — [wrong result] line 10
 - `test/sql/limit/test_batch_limit_filters.test` — [wrong result] line 14
@@ -106,7 +116,6 @@ rejects-table row count, plus M remnants logging_csv/logging_types).
 - `test/sql/types/timestamp/test_timestamp_tz.test` — [statement error: expected error, got success] line 24
 - `test/sql/types/type/test_make_get_type.test` — [wrong result] line 4
 - `test/sql/window/test_lead_lag.test` — [unexpected error: Out of Range Error: Overflow in subtraction of INT# (# - -#)!] line 121
-- `test/sql/window/test_volatile_independence.test` — [wrong result] line 10
 
 ---
 
@@ -133,10 +142,10 @@ records that would hit other buckets.
 
 > **Note (2026-06-10):** this table and the appendix below describe the
 > original 224-failure baseline and are kept as the classification record.
-> Buckets A–H and P were since fixed (see the tail-sweep update at the top of
-> this document). **The canonical list of the 44 files still failing today is
-> the itemized list in that update section**; the live report is
-> `/tmp/sqllogic_tail_final.txt`.
+> Buckets A–H, P and Q were since fixed (see the tail-sweep and `set seed`
+> updates at the top of this document). **The canonical list of the 40 files
+> still failing today is the itemized list in that update section**; the live
+> report is `/tmp/sqllogic_iejoin_full.txt`.
 
 | # | Bucket | Files | Root cause | Fixability | Example |
 |---|--------|------:|------------|------------|---------|
@@ -165,7 +174,7 @@ records that would hit other buckets.
 
 | File | Root cause | Fixability |
 |------|------------|------------|
-| `test/sql/join/iejoin/iejoin_projection_maps.test` | **Correctness bug**: IEJoin returns wrong aggregate over join result (`256987` vs `252652`). Highest-priority item in this doc. | engine |
+| `test/sql/join/iejoin/iejoin_projection_maps.test` | ~~Correctness bug: IEJoin returns wrong aggregate~~ **FIXED 2026-06-10 — was the runner dropping `set seed` (unseeded `random()` data), not IEJoin.** See the `set seed` fix note above. | runner |
 | `test/sql/optimizer/predicate_factoring.test` | **Correctness bug**: factoring `(a=1 AND b>3) OR (a=1 AND c<5)` yields `NULL` where DuckDB yields `false`. | engine |
 | `test/sql/aggregate/aggregates/test_quantile_disc.test` | `quantile_disc`/`percentile_disc` with `ORDER BY … DESC` modifier: DuckDB returns its descending-interval result (`1.2`), ours returns the plain discrete element (`1`). | engine |
 | `test/sql/function/operator/test_in_empty_table.test` | `int_col IN ('a','b','c','d','e')` (≥5 elements): DuckDB compares as VARCHAR collection; ours eagerly casts the literals to INT32 and errors. | engine |
@@ -210,7 +219,7 @@ records that would hit other buckets.
 | File | Symptom |
 |------|---------|
 | `test/sql/index/art/nodes/test_art_prefix_transform_deprecated_create.test` | exceeded the 30 s/file timeout under load; passes in the baseline run |
-| `test/sql/join/iejoin/test_iejoin_events.test` | nondeterministic wrong COUNT (`6` vs `2`) — same IEJoin code as `iejoin_projection_maps`; passed in the baseline run, so treat as evidence for the bucket-R IEJoin bug |
+| `test/sql/join/iejoin/test_iejoin_events.test` | ~~nondeterministic wrong COUNT (`6` vs `2`)~~ **FIXED 2026-06-10** — runner dropped `set seed`, so the COUNT was over unseeded random data and "passed" only when it landed on the expected value by luck. Not an IEJoin bug. |
 
 ---
 

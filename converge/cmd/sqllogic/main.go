@@ -471,7 +471,20 @@ func parseFile(path string) ([]record, error) {
 			p.pos++
 
 		case "set", "reset", "tags", "test_env", "hash-threshold", "continue":
-			// ignored (safe / not applicable to a fresh in-memory engine per file)
+			// "set seed <v>" seeds the RNG so random()-dependent expected values
+			// reproduce (duckdb's runner translates it to SELECT SETSEED(<v>)).
+			// Everything else is ignored (safe / not applicable to a fresh
+			// in-memory engine per file).
+			if tok == "set" && len(args) == 2 && args[0] == "seed" {
+				if _, err := strconv.ParseFloat(args[1], 64); err == nil {
+					appendRec(record{
+						kind:       recStatement,
+						line:       lineNo,
+						sql:        "SELECT SETSEED(" + args[1] + ")",
+						expectKind: "ok",
+					})
+				}
+			}
 			p.pos++
 
 		default:

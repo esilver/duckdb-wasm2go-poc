@@ -182,15 +182,23 @@ def render_atomic(node):
 
 
 def collect_vars(children, decls):
-    """Pull `var names type` decls out of the tree (anywhere). Mutates tree."""
+    """Pull `var names type` decls out of the tree (anywhere). Mutates tree.
+
+    CRITICAL: each decl is REPLACED by explicit zero-assignments in place.
+    A `var pN T` inside a loop re-zeroes pN every time control passes it;
+    hoisting the declaration without the zero-assign leaves a stale value
+    on re-entry (root cause of the shard17/Fn8538 window-aggregate
+    miscompile, found 2026-06-10 via flatten-only bisection)."""
     kept = []
     for node in children:
         if node.kind == 'leaf' and node.lines[0].startswith('var '):
             m = RE_VAR.match(node.lines[0])
             if not m:
                 raise GrammarError('unparsable var decl: %r' % node.lines[0])
-            for name in m.group(1).split(', '):
+            names = m.group(1).split(', ')
+            for name in names:
                 decls.append((name, m.group(2)))
+            kept.append(Node('leaf', lines=['; '.join('%s = 0' % n for n in names)]))
             continue
         if node.kind in ('bare', 'if'):
             node.children = collect_vars(node.children, decls)

@@ -401,7 +401,7 @@ func (c *conn) queryRawRowsLocked(query string) (driver.Rows, error) {
 		return nil, err
 	}
 	c.noteTxSuccessLocked(query)
-	return newRows(mod, resPtr)
+	return newRows(mod, c.mu, resPtr)
 }
 
 // Ping implements driver.Pinger by running a trivial "SELECT 1".
@@ -599,7 +599,7 @@ func (s *stmt) queryLocked(args []driver.NamedValue) (driver.Rows, error) {
 		return nil, err
 	}
 	s.c.noteTxSuccessLocked(s.query)
-	return newRows(mod, resPtr)
+	return newRows(mod, s.c.mu, resPtr)
 }
 
 // bindAll clears any prior bindings, then binds each NamedValue to its 1-indexed
@@ -667,11 +667,13 @@ type stmtRows struct {
 	c  *conn
 }
 
-// Close closes the underlying rows and then the owned statement.
+// Close closes the underlying rows and then the owned statement. rows.Close
+// takes the engine lock itself, so it must run BEFORE we take the lock for
+// the statement teardown (same mutex, not reentrant).
 func (r *stmtRows) Close() error {
+	err := r.Rows.Close()
 	r.c.mu.Lock()
 	defer r.c.mu.Unlock()
-	err := r.Rows.Close()
 	r.st.closeLocked()
 	return err
 }

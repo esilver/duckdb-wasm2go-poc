@@ -24,6 +24,12 @@
 #include "duckdb/main/capi/capi_internal.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/virtual_file_system.hpp"
+// FileSystem TRACE logging (CALL enable_logging('FileSystem')): the same
+// DUCKDB_LOG_FILE_SYSTEM_* macros LocalFileSystem fires; the handle's logger is
+// attached in OpenFile via FileHandle::TryAddLogger(opener).
+#include "duckdb/logging/file_system_logger.hpp"
+// FileOpener::TryGetCurrentSetting (file_search_path glob resolution).
+#include "duckdb/common/file_opener.hpp"
 // duckdb::Glob(s, slen, pattern, plen): the engine's own segment matcher
 // (*, ?, [..], \escape) — reused so host-FS glob semantics match LocalFileSystem
 // exactly.
@@ -99,6 +105,7 @@ public:
 		if (fd >= 0) {
 			host_close(fd);
 			fd = -1;
+			DUCKDB_LOG_FILE_SYSTEM_CLOSE((*this));
 		}
 	}
 
@@ -144,6 +151,12 @@ public:
 			throw IOException("HostFileSystem: failed to open \"%s\" (errno %d)", path, (int)-fd);
 		}
 		auto handle = make_uniq<HostFileHandle>(*this, path, flags, (int32_t)fd);
+		if (opener) {
+			// Attach the FileSystem logger (enable_logging('FileSystem')) and
+			// log the OPEN, like LocalFileSystem::OpenFile.
+			handle->TryAddLogger(*opener);
+			DUCKDB_LOG_FILE_SYSTEM_OPEN((*handle));
+		}
 		if (flags.OpenForAppending()) {
 			// Native opens with O_APPEND: every position-form Write lands at EOF.
 			// The WAL relies on this (WriteAheadLog::Initialize opens APPEND and
@@ -171,6 +184,7 @@ public:
 			throw IOException("HostFileSystem: short read on \"%s\" (%lld/%lld)", handle.path,
 			                  (long long)got, (long long)nr_bytes);
 		}
+		DUCKDB_LOG_FILE_SYSTEM_READ(handle, nr_bytes, location);
 	}
 	void Write(FileHandle &handle, void *buffer, int64_t nr_bytes, idx_t location) override {
 		auto &h = handle.Cast<HostFileHandle>();
@@ -182,6 +196,7 @@ public:
 			throw IOException("HostFileSystem: short write on \"%s\" (%lld/%lld)", handle.path,
 			                  (long long)put, (long long)nr_bytes);
 		}
+		DUCKDB_LOG_FILE_SYSTEM_WRITE(handle, nr_bytes, location);
 	}
 
 	// ----- position-tracking Read/Write (CSV scanner hot path) ----------------
@@ -191,6 +206,7 @@ public:
 		if (got < 0) {
 			throw IOException("HostFileSystem: read failed on \"%s\" (errno %d)", handle.path, (int)-got);
 		}
+		DUCKDB_LOG_FILE_SYSTEM_READ(handle, got, h.position);
 		h.position += (idx_t)got;
 		return got;
 	}
@@ -200,6 +216,7 @@ public:
 		if (put < 0) {
 			throw IOException("HostFileSystem: write failed on \"%s\" (errno %d)", handle.path, (int)-put);
 		}
+		DUCKDB_LOG_FILE_SYSTEM_WRITE(handle, put, h.position);
 		h.position += (idx_t)put;
 		return put;
 	}
@@ -357,13 +374,12 @@ public:
 		if (path.empty()) {
 			return result;
 		}
+		bool absolute = path[0] == '/' || path[0] == '\\';
 		if (!FileSystem::HasGlob(path)) {
-			// no wildcards: literal path, if it exists
-			// (read_csv_auto('/abs/file.csv') globs the literal path first)
-			if (host_exists(path.c_str(), (int32_t)path.size()) == 1) {
-				result.emplace_back(path);
-			}
-			return result;
+			// no wildcards: literal path, if it exists; otherwise (relative
+			// paths) try each file_search_path entry — LocalFileSystem's
+			// FetchFileWithoutGlob (local_file_system.cpp:1575).
+			return FetchWithoutGlob(path, opener, absolute);
 		}
 
 		// split the path into components (same loop as LocalGlobResult: the first
@@ -410,7 +426,6 @@ public:
 		};
 		std::priority_queue<ExpandDir> work;
 
-		bool absolute = path[0] == '/' || path[0] == '\\';
 		if (absolute) {
 			// like LocalGlobResult: no glob support in the FIRST level of an
 			// absolute path; start expansion below it
@@ -418,7 +433,19 @@ public:
 				work.emplace(splits[0], (idx_t)1);
 			}
 		} else {
-			work.emplace(".", (idx_t)0, true);
+			// If file_search_path is set, those paths are the first glob
+			// elements (local_file_system.cpp:1738) — results keep the search
+			// path prefix; cwd is only used when no search path is set.
+			Value search_value;
+			if (opener && opener->TryGetCurrentSetting("file_search_path", search_value)) {
+				auto search_paths = StringUtil::Split(search_value.ToString(), ',');
+				for (const auto &search_path : search_paths) {
+					work.emplace(search_path, (idx_t)0);
+				}
+			}
+			if (work.empty()) {
+				work.emplace(".", (idx_t)0, true);
+			}
 		}
 
 		while (!work.empty()) {
@@ -482,9 +509,29 @@ public:
 
 		if (result.empty()) {
 			// last-ditch effort (mirrors LocalGlobResult::ExpandNextPath): search
-			// the pattern as a string literal
-			if (host_exists(path.c_str(), (int32_t)path.size()) == 1) {
-				result.emplace_back(path);
+			// the pattern as a string literal (incl. file_search_path joins)
+			result = FetchWithoutGlob(path, opener, absolute);
+		}
+		return result;
+	}
+
+	// FetchWithoutGlob ports LocalFileSystem::FetchFileWithoutGlob: the literal
+	// path if it exists, else (relative paths only) the first-existing joins
+	// against the comma-separated file_search_path setting.
+	vector<OpenFileInfo> FetchWithoutGlob(const string &path, optional_ptr<FileOpener> opener, bool absolute_path) {
+		vector<OpenFileInfo> result;
+		if (host_exists(path.c_str(), (int32_t)path.size()) == 1) {
+			result.emplace_back(path);
+		} else if (!absolute_path) {
+			Value value;
+			if (opener && opener->TryGetCurrentSetting("file_search_path", value)) {
+				auto search_paths = StringUtil::Split(value.ToString(), ',');
+				for (const auto &search_path : search_paths) {
+					auto joined_path = JoinPath(search_path, path);
+					if (host_exists(joined_path.c_str(), (int32_t)joined_path.size()) == 1) {
+						result.emplace_back(joined_path);
+					}
+				}
 			}
 		}
 		return result;

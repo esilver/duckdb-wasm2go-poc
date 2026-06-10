@@ -3,12 +3,131 @@
 Canonical root-cause analysis of every file still failing the upstream DuckDB
 sqllogictest corpus.
 
-> **Current canonical baseline (2026-06-10, post wasm-rebuild):
-> 2,513 PASS / 20 FAIL / 789 SKIP — 99.2 % pass rate excluding skips**
-> (`/tmp/sqllogic_wasmrebuild.txt`). The dated sections below are the
-> chronological fix log (2,309 → 2,489 → 2,493 → 2,502 → 2,505 → 2,513); the
-> itemized "remaining files" list below marks the 8 files the wasm rebuild
-> struck from the 28.
+> **Current canonical baseline (2026-06-10, tail sweep #2):
+> 2,522 PASS / 9 FAIL / 791 SKIP — 99.6 % pass rate excluding skips**
+> (`/tmp/sqllogic_tail2_final.txt`). Every one of the 9 remaining failures is
+> a documented PERMANENT EXCLUSION (see the tail-sweep-#2 section below) —
+> the corpus is **done**: nothing left is believed fixable without changing
+> the build's environmental constraints (single-threaded wasm32, statically
+> linked ICU/json) or the upstream test itself. The dated sections below are
+> the chronological fix log (2,309 → 2,489 → 2,493 → 2,502 → 2,505 → 2,513 →
+> 2,522).
+
+**2026-06-10 corpus tail sweep #2 — all 20 remaining failures classified to
+ground truth; 10 fixed, 1 converted to an upstream-parity SKIP, 9 declared
+PERMANENT EXCLUSIONS.** Every file was re-run in isolation and compared
+against the official native DuckDB v1.5.3 CLI (same commit 14eca11 as
+`duckdb-src`). The translated ENGINE was wrong ZERO times — the running
+exoneration tally (bind_varchar, set-seed/IEJoin, tx-abort, stats-overflow
+catch dispatch, checkpoint-FATAL, WAL APPEND, …) now includes the rowsort
+bool rendering and `reset label` below; the engine has still never been wrong.
+
+Runner fixes (converge/cmd/sqllogic):
+
+- **`predicate_factoring` — runner rowsort/hash bool rendering.** The runner
+  rendered top-level BOOLEAN cells as "true"/"false"; upstream's runner
+  converts them to "1"/"0" (result_helper.cpp `SQLLogicTestConvertValue`)
+  BEFORE rowsort/valuesort ordering and md5 hashing. `rowsort` over a
+  BOOLEAN column with NULLs therefore sorted differently than the expected
+  block ("NULL" < "false" but "0" < "NULL"), producing position mismatches.
+  The engine's `(a=1 AND b>3) OR (a=1 AND c<5)` evaluation is correct and
+  was never factoring-buggy (probes match native row-for-row, with and
+  without `enable_verification`). The "engine correctness bug" recorded in
+  the R-table below is RETRACTED.
+- **`test_loosely_qualified_view_sql` — runner ignored `reset label`.** The
+  file reuses one hash label across `foreach` iterations with different view
+  bodies, resetting it between iterations; our parser dropped `reset label`
+  (lumped into ignored directives), so iteration 2 compared against
+  iteration 1's stored hash. The engine's loosely-qualified view SQL
+  requalification is CORRECT (all three view variants probe identical to
+  native). The R-table entry is RETRACTED.
+- **`errors_as_json` + `error_position` — runner unwrapped the engine's
+  INTENDED JSON errors.** The engine implements `SET errors_as_json=true`
+  correctly (ClientContext::ProcessError → ConvertErrorToJSON; verified
+  byte-equivalent to native). The runner's `decodeEngineError` decoded ANY
+  JSON-shaped error text back to "<Type> Error: <msg>" — needed historically
+  because the DRIVER's host-side fallback surfaces the raw C++ throw payload
+  (DuckDB exceptions carry transport JSON in `what()`). The decode now lives
+  in the DRIVER's fallback path only (`converge/duckdb/errjson.go`, applied
+  in `module.lastError`), so the runner sees exactly what a native client
+  sees: plain text normally, the intended JSON under errors_as_json.
+- **`test_icu_calendar` — runner Indian-calendar rendering.** The one failing
+  record renders a TIMESTAMPTZ under `SET CALENDAR='indian'`; the engine's
+  micros are EXACTLY native (epoch_us probe). The runner now ports ICU's
+  IndianCalendar (civil Saka over proleptic Gregorian,
+  icu indiancalendar.cpp handleComputeFields) for date rendering when the
+  session calendar is 'indian'; other non-default calendars keep the hybrid
+  Julian/Gregorian rendering.
+- **`test_sample_too_big` — `require ram 16gb` now SKIPs (upstream parity).**
+  Upstream's runner skips when `FileSystem::GetAvailableMemory()` is below
+  the requirement; our engine's ceiling is the wasm32 4 GiB address space
+  (runner caps at 512MB), so `require ram` above 4 GiB is MISSING → SKIP,
+  exactly like upstream on a small machine. (`array_large.test`, `require
+  ram 8gb`, moves PASS → SKIP for the same honest reason; it only passed at
+  512MB because its requirement is conservative.)
+
+Driver fixes (converge/duckdb):
+
+- **`test_json_serialize_plan` — JSON result cells now arrive RAW.** The
+  driver parsed JSON result columns into Go maps (duckdb-go semantics),
+  losing OBJECT KEY ORDER; the test's
+  `<REGEX>:.*LOGICAL_PROJECTION.*LOGICAL_GET.*` is order-sensitive (sorted
+  keys put `children` before `type`). JSON cells are now delivered as
+  `duckdb.JSONValue` raw text — exactly DuckDB's VARCHAR rendering of JSON —
+  and the runner compares raw text (with a structural-equality fallback for
+  whitespace differences). The serialized plan itself was always correct
+  (all LOGICAL_* names present).
+- **`test_make_get_type` — TYPE result decode.** `LogicalTypeId::TYPE` (the
+  results of `get_type`/`make_type`) has no C-API mapping
+  (`DUCKDB_TYPE_INVALID`); cells are VARCHAR-physical blobs holding a
+  BinarySerializer-encoded LogicalType. The driver now decodes the blob and
+  renders `LogicalType::ToString()` (`converge/duckdb/typedecode.go`: LEB128
+  varints, uint16 field ids, 0xFFFF object terminators; plain ids +
+  STRUCT/LIST/MAP/ARRAY/DECIMAL infos + alias; `SQLNULL` renders `"NULL"`
+  quoted, like types.cpp:508).
+
+Host-FS C++ fixes (host_fs.cpp, landed with this sweep's wasm rebuild):
+
+- **`read_csv_glob` — `file_search_path` was ignored by HostFileSystem::Glob**
+  (the resolution lives in LocalFileSystem, local_file_system.cpp:1738, which
+  we replace). Globs on relative paths now seed the expansion queue with the
+  comma-separated search paths (cwd only when unset), and the non-glob /
+  last-ditch lookups try the search-path joins (FetchFileWithoutGlob port).
+- **`logging_csv` + `logging_types` — FileSystem TRACE ops were never
+  logged.** Native logs OPEN/READ/WRITE/CLOSE from inside LocalFileSystem
+  via `FileHandle::TryAddLogger` + the `DUCKDB_LOG_FILE_SYSTEM_*` macros;
+  HostFileSystem replaced those methods without the hooks, so
+  `duckdb_logs_parsed('FileSystem')` was always empty (and the CSV log file
+  sniffed wrong column types from the empty/warning-only content). The same
+  macros now fire in HostFileSystem's OpenFile/Read/Write/Close (positions
+  logged exactly like local_file_system.cpp). [The earlier WAL-APPEND fix
+  was necessary but unrelated — log_storage.cpp's APPEND open was a red
+  herring; the missing piece was the logging hooks themselves.]
+
+**PERMANENT EXCLUSIONS — the 9 remaining failures, each justified:**
+
+| File | Justification (all verified against the official v1.5.3 CLI, same commit as duckdb-src) |
+|------|------------------------------------------------------------------------------------------|
+| `test/sql/aggregate/aggregates/test_quantile_disc.test` | **Upstream test bug at this tag.** Expects `1.2` from `quantile_disc(x, 0.8 ORDER BY x DESC)` over `(2),(1)`; the OFFICIAL v1.5.3 binary returns `1` (int32 — `1.2` is not even representable in the result type), bit-identical to us, in every variant (DESC modifier, negative quantile, optimizer off). The expectation matches a different (newer) development behavior. |
+| `test/sql/catalog/test_extension_suggestion.test` | **Static json extension (native parity).** Expects `from_json` to be "not in the catalog, but it exists in the json extension"; json is statically registered in this build — and the official CLI emits the IDENTICAL `Binder Error: No function matches…` we do. The test requires a no-autoload dynamic-extension environment. |
+| `test/sql/copy/csv/rejects/csv_rejects_read.test` | **Static ICU (native parity).** The dr_who.csv rejects probe expects 5 CAST rejects; with ICU loaded the TIMESTAMPTZ/TIMETZ column errors do not produce reject rows — the official CLI also logs exactly the 3 we log (date/time/timestamp). |
+| `test/sql/copy/csv/test_timestamptz_12926.test` | **Static ICU (native parity).** Expects `read_csv(dtypes=[TIMESTAMPTZ])` to reject `1/1/2020`; with ICU loaded the conversion SUCCEEDS — official CLI succeeds identically. |
+| `test/sql/function/generic/test_sleep.test` | **Single-threaded build.** `sleep_ms` raises "requires DuckDB to be compiled with thread support" — wasm build has no threads, by design. |
+| `test/sql/json/issues/read_json_memory_usage.test` | **Single-threaded build (native parity).** The expected OOM needs `SET threads=8` × per-thread JSON buffers to exceed 50MiB; native v1.5.3 with `threads=1` SUCCEEDS at 50MiB exactly like us (probe: count=5). Our build is permanently 1 thread. |
+| `test/sql/limit/test_batch_limit_filters.test` | **Single-threaded build (native parity).** Expects the batched LIMIT (no STREAMING_LIMIT); native v1.5.3 with `SET threads=1` also plans `STREAMING_LIMIT`. Plan shape is a thread-count consequence, not an engine defect. |
+| `test/sql/timezone/disable_timestamptz_casts.test` | **Static ICU.** The test asserts the setting "has no effect when ICU is not loaded"; ICU is statically linked (mirroring the cgo libduckdb), so the disabled-cast Binder Error correctly fires. |
+| `test/sql/types/timestamp/test_timestamp_tz.test` | **Static ICU.** Expects `TIMESTAMPTZ::DATE` to error without ICU; with ICU linked the cast correctly succeeds. |
+
+The first two ICU entries (and the json one) are not "wontfix because hard":
+the official native binary the corpus ships against behaves byte-identically
+to this build; the tests only pass under upstream's no-extension unittest
+configuration, which a statically-linked build cannot (and should not)
+emulate.
+
+> Historical note — the previous canonical baseline (2026-06-10 morning,
+> post wasm-rebuild #1) was 2,513 PASS / 20 FAIL / 789 SKIP
+> (`/tmp/sqllogic_wasmrebuild.txt`); the itemized "remaining files" list
+> below marks the 8 files that rebuild struck from the 28.
 
 **Provenance.** Corpus: `duckdb-src/test/sql` — 3,322 `.test` files
 (`.test_slow` excluded). Runner: `converge/cmd/sqllogic` (binary snapshot
@@ -197,30 +316,30 @@ files struck by the N fix above are removed; the 8 entries marked
 - ~~`test/sql/attach/attach_fsspec.test`~~ — struck 2026-06-10 (wasm rebuild: `file://` URLs)
 - ~~`test/sql/attach/attach_home_directory.test`~~ — struck 2026-06-10 (wasm rebuild: `~` expansion)
 - `test/sql/catalog/test_extension_suggestion.test` — [statement error: message mismatch] line 9
-- `test/sql/catalog/view/test_loosely_qualified_view_sql.test` — [hash mismatch] line 43
+- ~~`test/sql/catalog/view/test_loosely_qualified_view_sql.test`~~ — struck 2026-06-10 tail sweep #2 (runner: reset label)
 - ~~`test/sql/copy/csv/csv_home_directory.test`~~ — struck 2026-06-10 (wasm rebuild: `~` expansion)
-- `test/sql/copy/csv/glob/read_csv_glob.test` — [wrong result] line 211
+- ~~`test/sql/copy/csv/glob/read_csv_glob.test`~~ — struck 2026-06-10 tail sweep #2 (host_fs.cpp Glob: file_search_path)
 - `test/sql/copy/csv/rejects/csv_rejects_read.test` — [wrong row count] line 238
 - `test/sql/copy/csv/test_timestamptz_12926.test` — [statement error: expected error, got success] line 8
-- `test/sql/error/error_position.test` — [statement error: message mismatch] line 9
+- ~~`test/sql/error/error_position.test`~~ — struck 2026-06-10 tail sweep #2 (driver decodes transport JSON; intended errors_as_json JSON preserved)
 - ~~`test/sql/extensions/allowed_directories_install.test`~~ — struck 2026-06-10 (wasm rebuild: HOME-only WASI environ)
 - `test/sql/function/generic/test_sleep.test` — [unexpected error: Invalid Input Error: ThreadUtil::SleepMs requires DuckDB to be compiled with thre] line 6
 - `test/sql/json/issues/read_json_memory_usage.test` — [statement error: expected error, got success] line 25
-- `test/sql/json/test_json_serialize_plan.test` — [wrong result] line 10
+- ~~`test/sql/json/test_json_serialize_plan.test`~~ — struck 2026-06-10 tail sweep #2 (driver: raw JSON result cells)
 - `test/sql/limit/test_batch_limit_filters.test` — [wrong result] line 14
-- `test/sql/logging/logging_csv.test` — [wrong result] line 18
-- `test/sql/logging/logging_types.test` — [wrong row count] line 15
-- `test/sql/optimizer/predicate_factoring.test` — [wrong result] line 92
-- `test/sql/sample/test_sample_too_big.test` — [unexpected error: Out of Memory Error: Allocation failure] line 28
+- ~~`test/sql/logging/logging_csv.test`~~ — struck 2026-06-10 tail sweep #2 (host_fs.cpp FileSystem logging hooks)
+- ~~`test/sql/logging/logging_types.test`~~ — struck 2026-06-10 tail sweep #2 (host_fs.cpp FileSystem logging hooks)
+- ~~`test/sql/optimizer/predicate_factoring.test`~~ — struck 2026-06-10 tail sweep #2 (runner: bool "1"/"0" in rowsort/hash)
+- ~~`test/sql/sample/test_sample_too_big.test`~~ — struck 2026-06-10 tail sweep #2 (require ram now skips, upstream parity)
 - ~~`test/sql/secrets/create_secret_expression.test`~~ — struck 2026-06-10 (wasm rebuild: persistent secrets / mkdirat+stat64)
-- `test/sql/settings/errors_as_json.test` — [statement error: message mismatch] line 11
+- ~~`test/sql/settings/errors_as_json.test`~~ — struck 2026-06-10 tail sweep #2 (driver decodes transport JSON; intended errors_as_json JSON preserved)
 - ~~`test/sql/settings/test_disabled_file_systems.test`~~ — struck 2026-06-10 (wasm rebuild: disabled_filesystems enforcement)
 - ~~`test/sql/settings/test_disabled_local_filesystem_metadata.test`~~ — struck 2026-06-10 (wasm rebuild: same enforcement)
 - ~~`test/sql/storage/wal/wal_promote_version.test`~~ — struck 2026-06-10 (wasm rebuild: host_fs.cpp FILE_FLAGS_APPEND fix landed)
 - `test/sql/timezone/disable_timestamptz_casts.test` — [unexpected error: Binder Error: Casting from TIMESTAMP to TIMESTAMP WITH TIME ZONE without a] line 22
-- `test/sql/timezone/test_icu_calendar.test` — [wrong result] line 110
+- ~~`test/sql/timezone/test_icu_calendar.test`~~ — struck 2026-06-10 tail sweep #2 (runner: ICU IndianCalendar rendering)
 - `test/sql/types/timestamp/test_timestamp_tz.test` — [statement error: expected error, got success] line 24
-- `test/sql/types/type/test_make_get_type.test` — [wrong result] line 4
+- ~~`test/sql/types/type/test_make_get_type.test`~~ — struck 2026-06-10 tail sweep #2 (driver: TYPE blob decode)
 
 ---
 

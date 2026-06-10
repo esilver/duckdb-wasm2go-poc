@@ -21,7 +21,9 @@ package duckdb
 import (
 	"database/sql/driver"
 	"io"
+	"math"
 	"math/big"
+	"strconv"
 	"time"
 )
 
@@ -53,9 +55,23 @@ const (
 	dtTimestampNs = 22 // nanos since epoch
 	dtEnum        = 23
 	dtUuid        = 27
+	dtBit         = 29 // bitstring backed by a blob (first byte = padding bit count)
+	dtTimeTz      = 30 // uint64: micros-since-midnight << 24 | encoded offset
 	dtTimestampTz = 31 // micros since epoch
 	dtUhugeint    = 32
 	dtTimeNs      = 39 // nanos since midnight
+)
+
+// DuckDB date/timestamp ±infinity sentinels (duckdb-src/src/include/duckdb/common/
+// types/timestamp.hpp + date.hpp): timestamp_t::infinity() == INT64_MAX,
+// timestamp_t::ninfinity() == -INT64_MAX (NOT INT64_MIN); date_t::infinity() ==
+// INT32_MAX, date_t::ninfinity() == -INT32_MAX. The same int64 sentinels apply to
+// every timestamp width (s/ms/us/ns share timestamp_t's storage).
+const (
+	tsInfinity      = math.MaxInt64
+	tsNegInfinity   = -math.MaxInt64
+	dateInfinity    = math.MaxInt32
+	dateNegInfinity = -math.MaxInt32
 )
 
 // epoch is 1970-01-01 UTC, the reference point for DATE/TIMESTAMP/TIME values.
@@ -280,11 +296,12 @@ func (r *rows) Next(dest []driver.Value) (err error) {
 			continue
 		}
 		switch r.typeIDs[col] {
-		case dtList, dtStruct, dtMap:
-			// Nested result column (LIST/STRUCT/MAP, incl. arbitrary nesting):
-			// decode recursively via vecDecoder — LIST -> []any, STRUCT ->
-			// map[string]any, MAP -> map[any]any, the same shapes duckdb-go
-			// scans (and the UDF argument path delivers).
+		case dtList, dtStruct, dtMap, dtUnion, dtArray:
+			// Nested result column (LIST/STRUCT/MAP/UNION/ARRAY, incl. arbitrary
+			// nesting): decode recursively via vecDecoder — LIST/ARRAY -> []any,
+			// STRUCT -> map[string]any, MAP -> map[any]any, UNION -> the active
+			// member's value, the same shapes duckdb-go scans (and the UDF
+			// argument path delivers).
 			d := r.nestedDecs[col]
 			if d == nil {
 				d = mod.newVecDecoder(vec)
@@ -376,20 +393,28 @@ func (r *rows) decode(col int, dataPtr int32, row int) driver.Value {
 		return b
 
 	case dtDate:
-		days := int32(mod.readU32(dataPtr + int32(row*4)))
-		return epoch.AddDate(0, 0, int(days))
+		return dateValue(int32(mod.readU32(dataPtr + int32(row*4))))
 	case dtTimestamp, dtTimestampTz:
-		return epoch.Add(time.Duration(mod.readI64(dataPtr+int32(row*8))) * time.Microsecond)
+		return timestampValue(mod.readI64(dataPtr+int32(row*8)), time.Microsecond)
 	case dtTimestampS:
-		return epoch.Add(time.Duration(mod.readI64(dataPtr+int32(row*8))) * time.Second)
+		return timestampValue(mod.readI64(dataPtr+int32(row*8)), time.Second)
 	case dtTimestampMs:
-		return epoch.Add(time.Duration(mod.readI64(dataPtr+int32(row*8))) * time.Millisecond)
+		return timestampValue(mod.readI64(dataPtr+int32(row*8)), time.Millisecond)
 	case dtTimestampNs:
-		return epoch.Add(time.Duration(mod.readI64(dataPtr+int32(row*8))) * time.Nanosecond)
+		return timestampValue(mod.readI64(dataPtr+int32(row*8)), time.Nanosecond)
 	case dtTime:
 		return epoch.Add(time.Duration(mod.readI64(dataPtr+int32(row*8))) * time.Microsecond)
 	case dtTimeNs:
 		return epoch.Add(time.Duration(mod.readI64(dataPtr+int32(row*8))) * time.Nanosecond)
+	case dtTimeTz:
+		return timeTZString(mod.readU64(dataPtr + int32(row*8)))
+
+	case dtInterval:
+		return readInterval(mod, dataPtr, int64(row))
+
+	case dtBit:
+		_, b := readStringT(mod, dataPtr+int32(row*16))
+		return bitString(b)
 
 	case dtDecimal:
 		return decimalValue(mod, r.decimalMeta[col], dataPtr, row)
@@ -484,6 +509,243 @@ func decimalValue(mod *module, info decimalInfo, dataPtr int32, row int) driver.
 		return nil
 	}
 	return Decimal{Width: info.width, Scale: info.scale, Value: unscaled}
+}
+
+// ---- INTERVAL ------------------------------------------------------------------
+
+// Interval is a DuckDB INTERVAL value: the duckdb_interval storage struct
+// (amalg duckdb.h: int32 months, int32 days, int64 micros — 16 bytes/cell).
+// Its String form reproduces DuckDB's own interval->VARCHAR cast exactly
+// (IntervalToStringCast::Format, duckdb-src/src/include/duckdb/common/types/
+// cast_helpers.hpp), e.g. "43 years 9 months 27 days", "2 days", "00:00:01.5",
+// "-1 month 00:00:00.0001".
+type Interval struct {
+	Months int32
+	Days   int32
+	Micros int64
+}
+
+// Interval micro conversions (duckdb Interval::MICROS_PER_*).
+const (
+	microsPerSec    = int64(1000000)
+	microsPerMinute = 60 * microsPerSec
+	microsPerHour   = 60 * microsPerMinute
+)
+
+// String ports IntervalToStringCast::Format faithfully:
+//   - months are split into years+months; each non-zero component prints as
+//     "<n> <name>" with an "s" suffix unless n is 1 or -1 ("1 year", "-1 year",
+//     "2 years"), components separated by single spaces;
+//   - a non-zero time part prints as [-]HH:MM:SS[.ffffff] (hours not capped at
+//     two digits; micros are 6 digits with trailing zeros trimmed, min 1 digit);
+//   - the all-zero interval prints "00:00:00".
+func (iv Interval) String() string {
+	var b []byte
+	appendComponent := func(value int32, name string) {
+		if value == 0 {
+			return
+		}
+		if len(b) != 0 {
+			b = append(b, ' ')
+		}
+		b = strconv.AppendInt(b, int64(value), 10)
+		b = append(b, name...)
+		if value != 1 && value != -1 {
+			b = append(b, 's')
+		}
+	}
+	if iv.Months != 0 {
+		years := iv.Months / 12
+		months := iv.Months - years*12
+		appendComponent(years, " year")
+		appendComponent(months, " month")
+	}
+	if iv.Days != 0 {
+		appendComponent(iv.Days, " day")
+	}
+	if iv.Micros != 0 {
+		if len(b) != 0 {
+			b = append(b, ' ')
+		}
+		micros := iv.Micros
+		if micros < 0 {
+			// negative time: append the sign, then work in negative space so
+			// INT64_MIN cannot overflow on negation (mirrors the C++ code).
+			b = append(b, '-')
+		} else {
+			micros = -micros
+		}
+		hour := -(micros / microsPerHour)
+		micros += hour * microsPerHour
+		min := -(micros / microsPerMinute)
+		micros += min * microsPerMinute
+		sec := -(micros / microsPerSec)
+		micros += sec * microsPerSec
+		micros = -micros
+
+		if hour < 10 {
+			b = append(b, '0')
+		}
+		b = strconv.AppendInt(b, hour, 10)
+		b = append(b, ':')
+		b = appendTwoDigits(b, min)
+		b = append(b, ':')
+		b = appendTwoDigits(b, sec)
+		if micros != 0 {
+			b = append(b, '.')
+			b = appendMicrosTrimmed(b, int32(micros))
+		}
+	} else if len(b) == 0 {
+		return "00:00:00"
+	}
+	return string(b)
+}
+
+// appendTwoDigits renders 0 <= v <= 99 as exactly two digits when v < 10
+// (TimeToStringCast::FormatTwoDigits); larger values print all their digits.
+func appendTwoDigits(b []byte, v int64) []byte {
+	if v >= 0 && v < 10 {
+		b = append(b, '0')
+	}
+	return strconv.AppendInt(b, v, 10)
+}
+
+// appendMicrosTrimmed renders 0 <= micros <= 999999 as 6 zero-padded digits with
+// trailing zeros removed, keeping at least one digit (TimeToStringCast::FormatMicros
+// trims indexes 5..1, never index 0: 500000 -> "5", 100 -> "0001").
+func appendMicrosTrimmed(b []byte, micros int32) []byte {
+	var buf [6]byte
+	for i := 5; i >= 0; i-- {
+		buf[i] = byte('0' + micros%10)
+		micros /= 10
+	}
+	n := 6
+	for n > 1 && buf[n-1] == '0' {
+		n--
+	}
+	return append(b, buf[:n]...)
+}
+
+// readInterval reads the 16-byte duckdb_interval at dataPtr[row]:
+// int32 months @0, int32 days @4, int64 micros @8 (amalg duckdb.h).
+func readInterval(mod *module, dataPtr int32, row int64) Interval {
+	base := dataPtr + int32(row*16)
+	return Interval{
+		Months: int32(mod.readU32(base)),
+		Days:   int32(mod.readU32(base + 4)),
+		Micros: mod.readI64(base + 8),
+	}
+}
+
+// ---- TIMETZ / BIT / infinity-aware DATE & TIMESTAMP ------------------------------
+
+// timeTZString renders a TIMETZ cell. Storage (duckdb.h + datetime.hpp dtime_tz_t):
+// one uint64 whose upper 40 bits are micros-since-midnight and lower 24 bits the
+// REVERSED, BIASED utc offset: stored = MAX_OFFSET - offset, MAX_OFFSET = 57599
+// (= 15:59:59). Rendering ports StringCastTZ::Operation(dtime_tz_t)
+// (duckdb-src/src/common/operator/string_cast.cpp): HH:MM:SS[.ffffff] then
+// sign + HH, then ":MM" only when MM != 0 and ":SS" only when SS != 0.
+func timeTZString(bits uint64) string {
+	const offsetMask = uint64(1)<<24 - 1 // dtime_tz_t::OFFSET_MASK (~0 >> TIME_BITS)
+	const maxOffset = int64(16*60*60 - 1)
+	micros := int64(bits >> 24)
+	offset := maxOffset - int64(bits&offsetMask)
+
+	// Time part: HH:MM:SS plus optional trimmed micros.
+	hour := micros / microsPerHour
+	micros -= hour * microsPerHour
+	min := micros / microsPerMinute
+	micros -= min * microsPerMinute
+	sec := micros / microsPerSec
+	micros -= sec * microsPerSec
+	var b []byte
+	b = appendTwoDigits(b, hour)
+	b = append(b, ':')
+	b = appendTwoDigits(b, min)
+	b = append(b, ':')
+	b = appendTwoDigits(b, sec)
+	if micros != 0 {
+		b = append(b, '.')
+		b = appendMicrosTrimmed(b, int32(micros))
+	}
+
+	// Offset part.
+	if offset < 0 {
+		b = append(b, '-')
+		offset = -offset
+	} else {
+		b = append(b, '+')
+	}
+	hh := offset / 3600
+	b = appendTwoDigits(b, hh)
+	offset %= 3600
+	mm := offset / 60
+	ss := offset % 60
+	if mm != 0 {
+		b = append(b, ':')
+		b = appendTwoDigits(b, mm)
+	}
+	if ss != 0 {
+		b = append(b, ':')
+		b = appendTwoDigits(b, ss)
+	}
+	return string(b)
+}
+
+// bitString renders a BIT cell's backing blob as DuckDB's "0101..." VARCHAR cast.
+// Layout (duckdb-src/src/common/types/bit.cpp, Bit::ToString/GetBitPadding): the
+// blob's first byte holds the count of padding bits in the FIRST data byte; data
+// bytes follow MSB-first, so the bitstring is bits [padding..8) of blob[1] then
+// all 8 bits of each subsequent byte.
+func bitString(blob []byte) string {
+	if len(blob) < 2 {
+		return ""
+	}
+	padding := int(blob[0])
+	if padding > 8 {
+		return "" // malformed; never expected
+	}
+	out := make([]byte, 0, (len(blob)-1)*8-padding)
+	appendByte := func(v byte, from int) {
+		for bit := from; bit < 8; bit++ {
+			if v&(1<<(7-bit)) != 0 {
+				out = append(out, '1')
+			} else {
+				out = append(out, '0')
+			}
+		}
+	}
+	appendByte(blob[1], padding)
+	for i := 2; i < len(blob); i++ {
+		appendByte(blob[i], 0)
+	}
+	return string(out)
+}
+
+// timestampValue maps a raw timestamp payload (int64 in `unit` since epoch) to a
+// time.Time, EXCEPT the ±infinity sentinels which DuckDB renders as the strings
+// "infinity"/"-infinity" (test_infinite_time.test). The sentinels are the same
+// int64 values for every timestamp width.
+func timestampValue(raw int64, unit time.Duration) driver.Value {
+	switch raw {
+	case tsInfinity:
+		return "infinity"
+	case tsNegInfinity:
+		return "-infinity"
+	}
+	return epoch.Add(time.Duration(raw) * unit)
+}
+
+// dateValue maps a raw DATE payload (int32 days since epoch) to a time.Time,
+// except the ±infinity sentinels (INT32_MAX / -INT32_MAX), delivered as strings.
+func dateValue(days int32) driver.Value {
+	switch days {
+	case dateInfinity:
+		return "infinity"
+	case dateNegInfinity:
+		return "-infinity"
+	}
+	return epoch.AddDate(0, 0, int(days))
 }
 
 // formatDecimal renders unscaled / 10^scale as an exact decimal string.

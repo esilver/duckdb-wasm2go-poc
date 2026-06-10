@@ -175,6 +175,11 @@ func (mod *module) readCellT(typeID, scale, internalType, dataPtr, validPtr int3
 	case dtDouble:
 		return mod.readF64(dataPtr + int32(row*8))
 
+	case dtHugeint:
+		return hugeintValue(mod, dataPtr, int(row), true)
+	case dtUhugeint:
+		return hugeintValue(mod, dataPtr, int(row), false)
+
 	case dtVarchar:
 		s, _ := readStringT(mod, dataPtr+int32(row*16))
 		return s
@@ -183,11 +188,28 @@ func (mod *module) readCellT(typeID, scale, internalType, dataPtr, validPtr int3
 		return b
 
 	case dtDate:
-		days := int32(mod.readU32(dataPtr + int32(row*4)))
-		return epoch.AddDate(0, 0, int(days))
+		return dateValue(int32(mod.readU32(dataPtr + int32(row*4))))
 	case dtTimestamp, dtTimestampTz:
-		micros := mod.readI64(dataPtr + int32(row*8))
-		return epoch.Add(time.Duration(micros) * time.Microsecond)
+		return timestampValue(mod.readI64(dataPtr+int32(row*8)), time.Microsecond)
+	case dtTimestampS:
+		return timestampValue(mod.readI64(dataPtr+int32(row*8)), time.Second)
+	case dtTimestampMs:
+		return timestampValue(mod.readI64(dataPtr+int32(row*8)), time.Millisecond)
+	case dtTimestampNs:
+		return timestampValue(mod.readI64(dataPtr+int32(row*8)), time.Nanosecond)
+	case dtTime:
+		return epoch.Add(time.Duration(mod.readI64(dataPtr+int32(row*8))) * time.Microsecond)
+	case dtTimeNs:
+		return epoch.Add(time.Duration(mod.readI64(dataPtr+int32(row*8))) * time.Nanosecond)
+	case dtTimeTz:
+		return timeTZString(mod.readU64(dataPtr + int32(row*8)))
+
+	case dtInterval:
+		return readInterval(mod, dataPtr, row)
+
+	case dtBit:
+		_, b := readStringT(mod, dataPtr+int32(row*16))
+		return bitString(b)
 
 	default:
 		return nil

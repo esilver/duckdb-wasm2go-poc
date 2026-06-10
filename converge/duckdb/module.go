@@ -93,8 +93,43 @@ func newModule() *module {
 	e := newEnv()
 	m := core.New(e, e.Shim)
 	m.X_initialize()
+	relocateShadowStack(m)
 	mod := &module{m: m, e: e}
 	return mod
+}
+
+// shadowStackSize is the size of the relocated C shadow stack (see
+// relocateShadowStack). DuckDB's recursion guards are LOGICAL counters tuned
+// for native ~8MB thread stacks: e.g. ExpressionBinder::StackCheck only throws
+// "Max expression depth limit" once stack_depth reaches max_expression_depth
+// (default 1000), which takes ~1.5-2MB of real stack to bind. 32MB gives the
+// same headroom native DuckDB assumes, with margin for the parser/optimizer
+// recursions that share the guard.
+const shadowStackSize = 32 << 20
+
+// relocateShadowStack moves the engine's C shadow stack from the 64KB region
+// the wasm binary was linked with onto a large block malloc'd from the
+// engine's own heap. The emscripten build ships STACK_SIZE=64KB placed right
+// above the data segment; wasm stack overflow does NOT trap — the stack
+// pointer just runs down into the data segment, silently corrupting globals
+// (seen as "slice bounds out of range [<ASCII garbage>:...]" panics when a
+// trashed constant is later used as a pointer, e.g. binding a self-recursive
+// macro: duckdb-src/test/sql/catalog/function/test_recursive_macro*.test).
+// With a 32MB stack, DuckDB's logical depth guards fire (clean BinderException)
+// long before the stack can overflow.
+//
+// Safe because: it runs between exported calls (wasm stack is empty, the stack
+// pointer global g0 sits at its initial top, so nothing references the old
+// region); the block comes from the module's own dlmalloc heap, so the heap
+// never collides with it; and it is pinned for the module's lifetime (never
+// freed). The stack pointer must stay 16-byte aligned per the wasm C ABI.
+func relocateShadowStack(m *core.Module) {
+	base := m.Xmalloc(shadowStackSize)
+	if base == 0 {
+		panic("duckdb: cannot allocate shadow stack")
+	}
+	top := (base + shadowStackSize) &^ 0xF // grows down from top; 16-byte aligned
+	m.X_emscripten_stack_restore(top)
 }
 
 // inject appends a Go closure to the engine's LIVE indirect-function table and

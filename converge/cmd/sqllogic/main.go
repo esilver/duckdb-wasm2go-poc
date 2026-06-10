@@ -718,6 +718,10 @@ func executeFile(path string) fileResult {
 	} else {
 		defer os.RemoveAll(scratch)
 	}
+	// Native-runner parity (sqllogic_test_runner.cpp Reconnect): redirect
+	// persistent secrets into the per-file scratch dir so CREATE PERSISTENT
+	// SECRET never touches the real ~/.duckdb/stored_secrets.
+	_, _ = db.Exec("SET secret_directory='" + scratch + "/test_secret_dir'")
 	st := &execState{
 		db:          db,
 		conns:       map[string]*sql.Conn{},
@@ -828,6 +832,14 @@ func (st *execState) substitute(s string, subs []sub) string {
 		s = strings.ReplaceAll(s, "${"+sb.name+"}", sb.val)
 		s = strings.ReplaceAll(s, "{"+sb.name+"}", sb.val)
 	}
+	// {WORKING_DIR}/__TEST_DIR__ composes a single path in the upstream harness
+	// because its __TEST_DIR__ is RELATIVE to the working dir (TestDirectoryPath
+	// returns "duckdb_unittest_tempdir/<pid>"). Ours is absolute, so the literal
+	// concatenation would be bogus — substitute the combined token with the test
+	// dir itself, which is the exact path the native expansion denotes.
+	// (Used by test/sql/attach/attach_fsspec.test: 'file://{WORKING_DIR}/__TEST_DIR__/...'.)
+	s = strings.ReplaceAll(s, "${WORKING_DIR}/__TEST_DIR__", st.testDir)
+	s = strings.ReplaceAll(s, "{WORKING_DIR}/__TEST_DIR__", st.testDir)
 	// environment keywords per duckdb-src/test/README.md "Test Contract"
 	for _, kv := range [][2]string{
 		{"DATA_DIR", dataDir},
@@ -1070,7 +1082,20 @@ func (st *execState) execStatement(r *record, subs []sub) error {
 	expErr := st.substitute(strings.Join(r.expected, "\n"), subs)
 
 	if rawErr != nil && isInternalError(errMsg) {
-		return failStop{failInternal, snip(sqlText) + "\n=> " + errMsg, r.line}
+		// Native parity: DuckDB's own runner matches `statement error` by plain
+		// substring containment with NO FATAL/INTERNAL carve-out
+		// (test/sqlite/result_helper.cpp:311-316). The checkpoint fault-injection
+		// tests (test_checkpoint_failure_*) EXPECT a FATAL ("Checkpoint aborted
+		// before header write..."); native v1.5.3 throws the byte-identical FATAL
+		// and passes. Only treat a FATAL/INTERNAL error as an automatic failure
+		// when the record did not expect that exact error. (After an expected
+		// FATAL the database is invalidated natively too, so any later record
+		// touching it fails on both sides — no extra handling needed.)
+		expectedFatal := (r.expectKind == "error" || r.expectKind == "maybe") &&
+			expErr != "" && errorMatches(errMsg, expErr)
+		if !expectedFatal {
+			return failStop{failInternal, snip(sqlText) + "\n=> " + errMsg, r.line}
+		}
 	}
 
 	switch r.expectKind {

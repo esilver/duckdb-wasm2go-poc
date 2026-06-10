@@ -124,8 +124,53 @@ Running tally of "engine bugs" that were really glue/harness: bind_varchar,
 set-seed/IEJoin, tx-abort (runner), stats max−min overflow (exhost catch
 dispatch). The translated engine has not yet been wrong.
 
-**The 31 remaining files** (first-failure symptom; the nine struck by the
-I/J fixes above are removed):
+**2026-06-10 checkpoint/WAL sweep (class N: 3 runner fixes + 1 root-caused
+host-FS C++ bug — translated engine exonerated again).**
+
+- **N (checkpoint-FATAL trio) — FIXED, was the RUNNER.** The three checkpoint
+  fault-injection files (`test_checkpoint_failure_on_detach` /
+  `_delayed_commit` / `_delayed_rollback`) EXPECT the fatal:
+  `statement error … Checkpoint aborted before header write because of PRAGMA
+  checkpoint_abort flag`. Our engine throws the byte-identical
+  `FATAL Error: Detached database '…', but CHECKPOINT during DETACH failed …`
+  that native v1.5.3 throws (verified CLI side-by-side; the database is
+  invalidated afterwards on BOTH sides), but the runner's `isInternalError`
+  pre-check classified ANY "FATAL Error" as an automatic INTERNAL/fatal
+  failure BEFORE the expected-error match ran. DuckDB's own runner matches
+  `statement error` by plain substring with no FATAL/INTERNAL carve-out
+  (`test/sqlite/result_helper.cpp:311-316`). Fix (`execStatement`): a
+  FATAL/INTERNAL error that an `error`/`maybe` record expects (non-empty
+  pattern that matches) flows into normal expectation matching. The engine's
+  checkpoint-failure semantics — including `debug_checkpoint_abort` fault
+  injection — are CORRECT.
+- **N (`wal_promote_version`) — ROOT-CAUSED: hand-written C++ host-FS glue
+  (`host_fs.cpp`), pending wasm rebuild.** `HostFileSystem::OpenFile` drops
+  `FILE_FLAGS_APPEND`. Native maps the flag to `O_APPEND`
+  (`local_file_system.cpp:347`) and the WAL relies on it
+  (`WriteAheadLog::Initialize` opens APPEND; `BufferedFileWriter` writes via
+  the position-form `Write`). Our `HostFileHandle` starts `position = 0`, so
+  appending to an EXISTING WAL on re-attach (checkpoint-on-shutdown disabled,
+  STORAGE_VERSION promotion) silently OVERWRITES the WAL head in place: the
+  WAL stays 275 bytes (native grows 275 → 383) with the cycle-1
+  use_table/insert/flush entries written over the CREATE TABLE entry, and the
+  next replay finds no table → `Catalog Error: Table with name T does not
+  exist!` (byte-level hexdump proof; cycle-0 WAL+db are byte-identical to
+  native). Fix is one hunk — initialize the handle position to the file size
+  when `flags.OpenForAppending()` (`BufferedFileWriter::Truncate` already
+  re-Seeks, so WAL truncation composes) — handed to the wasm-rebuild lane:
+  `/tmp/checkpoint/host_fs_append.patch`. Regression test
+  `converge/duckdb/walpromote_repro_test.go` (skips until the rebuild lands;
+  run with `WALREPRO=1`). The `log_storage.cpp` APPEND open suggests part of
+  class M shares this cause.
+
+New baseline: **2,505 PASS / 28 FAIL / 789 SKIP — 98.9 % pass rate excluding
+skips** (`/tmp/sqllogic_checkpoint_full.txt`); the 28 are a strict subset of
+the 31 (zero new failures). Tally: checkpoint-FATAL was the runner; the WAL
+append bug is OUR hand-written host-FS shim — the TRANSLATED engine C++ has
+still never been wrong.
+
+**The 28 remaining files** (first-failure symptom; the three checkpoint-FATAL
+files struck by the N fix above are removed):
 
 - `test/sql/aggregate/aggregates/test_quantile_disc.test` — [wrong result] line 97
 - `test/sql/attach/attach_fsspec.test` — [unexpected error: IO Error: HostFileSystem: failed to open ? (errno #)] line 13
@@ -150,10 +195,7 @@ I/J fixes above are removed):
 - `test/sql/settings/errors_as_json.test` — [statement error: message mismatch] line 11
 - `test/sql/settings/test_disabled_file_systems.test` — [statement error: expected error, got success] line 37
 - `test/sql/settings/test_disabled_local_filesystem_metadata.test` — [statement error: expected error, got success] line 22
-- `test/sql/storage/checkpoint/test_checkpoint_failure_delayed_commit.test` — [INTERNAL/fatal error] line 32
-- `test/sql/storage/checkpoint/test_checkpoint_failure_delayed_rollback.test` — [INTERNAL/fatal error] line 32
-- `test/sql/storage/checkpoint/test_checkpoint_failure_on_detach.test` — [INTERNAL/fatal error] line 20
-- `test/sql/storage/wal/wal_promote_version.test` — [unexpected error: Catalog Error: Table with name T does not exist!] line 32
+- `test/sql/storage/wal/wal_promote_version.test` — [unexpected error: Catalog Error: Table with name T does not exist!] line 32 — root-caused (host_fs.cpp APPEND), fix pending wasm rebuild
 - `test/sql/timezone/disable_timestamptz_casts.test` — [unexpected error: Binder Error: Casting from TIMESTAMP to TIMESTAMP WITH TIME ZONE without a] line 22
 - `test/sql/timezone/test_icu_calendar.test` — [wrong result] line 110
 - `test/sql/types/timestamp/test_timestamp_tz.test` — [statement error: expected error, got success] line 24
@@ -204,7 +246,7 @@ records that would hit other buckets.
 | K | Error-text fidelity tail | 7 | Right rejection, wrong message/shape: prepared-parameter count text, missing "exists in the json extension" suggestion, `errors_as_json` MISSING_ENTRY type, error `position` field, error-precedence (duplicate-map-key fires before catalog "already exists"). | engine | `test/sql/catalog/table/create_table_parameters.test` |
 | L | Host-FS / sandbox environment gaps | 7 | `~` not expanded, `file://` URLs unsupported, `getcwd` unimplemented, `mkdir .duckdb` unimplemented (persistent secrets), `SET disabled_filesystems`/local-FS-metadata not enforced against HostFileSystem. Also a real driver bug: HostFileSystem errors print literal placeholders — `failed to open "{}" (errno {})`. | driver | `test/sql/attach/attach_home_directory.test` |
 | M | Logging subsystem parity | 5 | `current_query_id()` returns `UINT64_MAX` (then `+1` overflows), `duckdb_logs` contains extra QueryLog rows, FileSystem TRACE ops are never logged (host FS bypasses the engine logger), logged-CSV column types differ. | driver+engine | `test/sql/logging/logging_context_ids.test` |
-| N | Checkpoint/WAL deep storage semantics | 4 | Delayed CHECKPOINT after DETACH escalates to `FATAL Error: Detached database 'db', but CHECKPOINT during DETACH failed` instead of the expected scoped error; `wal_promote_version` loses the table on WAL replay. | engine | `test/sql/storage/checkpoint/test_checkpoint_failure_on_detach.test` |
+| N | Checkpoint/WAL deep storage semantics | 4 | ~~Delayed CHECKPOINT after DETACH escalates to `FATAL Error: …`~~ **3 files FIXED 2026-06-10 — the FATAL is byte-identical to native; the runner's INTERNAL/fatal pre-check fired before expected-error matching.** `wal_promote_version` root-caused: `host_fs.cpp` drops `FILE_FLAGS_APPEND`, WAL appends overwrite offset 0 on re-attach (fix pending wasm rebuild). | runner + host-FS C++ | `test/sql/storage/checkpoint/test_checkpoint_failure_on_detach.test` |
 | O | ICU statically built in | 2 | These tests assume a build *without* ICU ("Setting has no effect when ICU is not loaded"); our build links ICU in, so TIMESTAMPTZ casts behave like upstream-with-ICU and the no-ICU expectations fail. | wontfix | `test/sql/timezone/disable_timestamptz_casts.test` |
 | P | Runner limitations | 16 | (a) 14 files: upstream expected blocks contain alignment/trailing tabs (`Bob\t\t6.5`, `2\t12\t`); the runner splits strictly on single tabs → "expected row has N tab-separated values". (b) 2 files: multi-variable `foreach type,min,max …` is not parsed, so `${type}` reaches the parser. | runner | `test/sql/aggregate/aggregates/test_weighted_avg.test` |
 | Q | RNG sequence parity | 2 | After `set seed`, `random()`/`USING SAMPLE` do not reproduce DuckDB's pcg sequence (and window sharing of volatile expressions evaluates in a different order). | engine | `test/sql/function/numeric/set_seed_for_sample.test` |
@@ -515,14 +557,14 @@ report).
 | `test/sql/logging/logging_types.test` | [wrong row count] line 15 |
 | `test/sql/logging/test_logging_function.test` | [unexpected error: Out of Range Error: Overflow in addition of UINT# (# + #)!] line 29 |
 
-### N — Checkpoint/WAL deep storage semantics (4 files, engine)
+### N — Checkpoint/WAL deep storage semantics (4 files, runner + host-FS C++)
 
 | file | first failure |
 |------|---------------|
-| `test/sql/storage/checkpoint/test_checkpoint_failure_delayed_commit.test` | [INTERNAL/fatal error] line 32 |
-| `test/sql/storage/checkpoint/test_checkpoint_failure_delayed_rollback.test` | [INTERNAL/fatal error] line 32 |
-| `test/sql/storage/checkpoint/test_checkpoint_failure_on_detach.test` | [INTERNAL/fatal error] line 20 |
-| `test/sql/storage/wal/wal_promote_version.test` | [unexpected error: Catalog Error: Table with name T does not exist!] line 32 |
+| `test/sql/storage/checkpoint/test_checkpoint_failure_delayed_commit.test` | ~~[INTERNAL/fatal error] line 32~~ **FIXED 2026-06-10 (runner: expected-FATAL parity; engine byte-identical to native)** |
+| `test/sql/storage/checkpoint/test_checkpoint_failure_delayed_rollback.test` | ~~[INTERNAL/fatal error] line 32~~ **FIXED 2026-06-10 (same runner fix)** |
+| `test/sql/storage/checkpoint/test_checkpoint_failure_on_detach.test` | ~~[INTERNAL/fatal error] line 20~~ **FIXED 2026-06-10 (same runner fix)** |
+| `test/sql/storage/wal/wal_promote_version.test` | [unexpected error: Catalog Error: Table with name T does not exist!] line 32 — root-caused: `host_fs.cpp` `OpenFile` drops `FILE_FLAGS_APPEND`; WAL append after re-attach overwrites the WAL head at offset 0. Fix handed to the wasm-rebuild lane (`/tmp/checkpoint/host_fs_append.patch`); regression test `converge/duckdb/walpromote_repro_test.go` |
 
 ### O — ICU statically built in (2 files, wontfix)
 

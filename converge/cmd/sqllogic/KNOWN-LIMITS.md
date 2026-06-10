@@ -129,7 +129,14 @@ records that would hit other buckets.
 
 ---
 
-## Summary table
+## Summary table — HISTORICAL (2026-06-09 baseline, 224 failures)
+
+> **Note (2026-06-10):** this table and the appendix below describe the
+> original 224-failure baseline and are kept as the classification record.
+> Buckets A–H and P were since fixed (see the tail-sweep update at the top of
+> this document). **The canonical list of the 44 files still failing today is
+> the itemized list in that update section**; the live report is
+> `/tmp/sqllogic_tail_final.txt`.
 
 | # | Bucket | Files | Root cause | Fixability | Example |
 |---|--------|------:|------------|------------|---------|

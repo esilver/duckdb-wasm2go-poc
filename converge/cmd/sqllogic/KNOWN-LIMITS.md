@@ -74,9 +74,59 @@ below (I, J, K remnants, N, O, R singles, A remnants:
 `read_csv_glob` relative `glob('*/*.csv')` count and `csv_rejects_read`
 rejects-table row count, plus M remnants logging_csv/logging_types).
 
-**The 40 remaining files** (first-failure symptom):
+**2026-06-10 tx-abort + stats-overflow fixes (classes I and J — both OUR
+GLUE, not the engine).**
 
-- `test/sql/aggregate/aggregates/test_null_aggregates.test` — [unexpected error: Invalid Error: Unoptimized statement differs from original result!] line 314
+- **I (explicit-tx aborted state) — FIXED, was the RUNNER.** The three
+  `multistatement_is_transactional_chained_*` files send
+  `BEGIN TRANSACTION; <failing stmt>` as ONE record. The runner's `inTxn`
+  tracking only looked at the prefix of the whole record text and only on
+  overall success, so the BEGIN that succeeded as a split part went
+  unrecorded; the record's expected error then triggered the sacrificial
+  `ROLLBACK`, destroying the very transaction the next record expects to be
+  aborted ("Current transaction is aborted (please ROLLBACK)"). The engine's
+  aborted-state semantics are CORRECT — the sibling file
+  `multistatement_is_transactional_after_BEGIN.test` (same scenario, BEGIN as
+  its own record) always passed. Fix: track tx state per executed part
+  (`trackTxn`) in both `execStatement` and `execQuery`. All 3 files pass.
+- **J (stats max−min overflow) — FIXED in exhost (catch-dispatch id
+  collision), the engine C++ was right all along.** Native v1.5.3 runs the
+  same statements clean. The overflow is REAL but INTERNAL:
+  `CompressedMaterialization::GetIntegralRangeValue` evaluates
+  `stats_max - stats_min` through `ExpressionExecutor::TryEvaluateScalar`,
+  whose landing pad is `catch (InternalException &) { throw; }
+  catch (...) { return false; }` — natively the OutOfRangeException is
+  swallowed and compression is skipped. In exhost, `typeID(0)` (the
+  catch-all) returned the reserved id 1 while `nextType` ALSO started at 1,
+  so the first real typeinfo (InternalException) shared id 1: the catch-all
+  match published an id equal to `llvm_eh_typeid_for(InternalException)`,
+  the pad entered the typed clause and RETHREW. Every query whose column
+  stats spanned more than the type's range (ORDER BY / GROUP BY / LAG over
+  ±extreme columns) surfaced "Out of Range Error: Overflow in subtraction"
+  (or, under the tests' own `PRAGMA enable_verification`, the wrapper
+  "Unoptimized statement differs from original result!" — verification is
+  test-enabled, not a build flag of ours). Fix: real type ids start at 2
+  (`exhost/host.go`); regression `duckdb/statsoverflow_test.go`. Fixes
+  `test_null_aggregates`, `hugeint_order_by_extremes`, `test_lead_lag` (and
+  J's historical siblings `group_by_limits`, `test_leadlag_orderby`). Any
+  other `catch (T) {...} catch (...) {...}` pad whose first-registered typed
+  candidate collided with id 1 was equally exposed; the same fix flipped
+  THREE more files: `test_in_empty_table` and `test_in_rewrite_rule` (the
+  "IN-list eagerly casts VARCHAR literals to INT32 and errors" R-class entry —
+  the binder's try-cast fallback is a catch(...) pad; native-matching empty
+  result now) and `map_from_entries/data_types` (K, error-shape now matches).
+
+New baseline: **2,502 PASS / 31 FAIL / 789 SKIP — 98.8 % pass rate excluding
+skips** (`/tmp/sqllogic_txstats_full.txt`); 9 files flipped, zero new
+failures vs the 2,493/40 baseline.
+
+Running tally of "engine bugs" that were really glue/harness: bind_varchar,
+set-seed/IEJoin, tx-abort (runner), stats max−min overflow (exhost catch
+dispatch). The translated engine has not yet been wrong.
+
+**The 31 remaining files** (first-failure symptom; the nine struck by the
+I/J fixes above are removed):
+
 - `test/sql/aggregate/aggregates/test_quantile_disc.test` — [wrong result] line 97
 - `test/sql/attach/attach_fsspec.test` — [unexpected error: IO Error: HostFileSystem: failed to open ? (errno #)] line 13
 - `test/sql/attach/attach_home_directory.test` — [statement error: message mismatch] line 20
@@ -89,15 +139,12 @@ rejects-table row count, plus M remnants logging_csv/logging_types).
 - `test/sql/error/error_position.test` — [statement error: message mismatch] line 9
 - `test/sql/extensions/allowed_directories_install.test` — [statement error: message mismatch] line 15
 - `test/sql/function/generic/test_sleep.test` — [unexpected error: Invalid Input Error: ThreadUtil::SleepMs requires DuckDB to be compiled with thre] line 6
-- `test/sql/function/operator/test_in_empty_table.test` — [unexpected error: Conversion Error: Could not convert string ? to INT#] line 8
 - `test/sql/json/issues/read_json_memory_usage.test` — [statement error: expected error, got success] line 25
 - `test/sql/json/test_json_serialize_plan.test` — [wrong result] line 10
 - `test/sql/limit/test_batch_limit_filters.test` — [wrong result] line 14
 - `test/sql/logging/logging_csv.test` — [wrong result] line 18
 - `test/sql/logging/logging_types.test` — [wrong row count] line 15
 - `test/sql/optimizer/predicate_factoring.test` — [wrong result] line 92
-- `test/sql/optimizer/test_in_rewrite_rule.test` — [unexpected error: Conversion Error: Could not convert string ? to INT#] line 15
-- `test/sql/order/hugeint_order_by_extremes.test` — [unexpected error: Invalid Error: Unoptimized statement differs from original result!] line 14
 - `test/sql/sample/test_sample_too_big.test` — [unexpected error: Out of Memory Error: Allocation failure] line 28
 - `test/sql/secrets/create_secret_expression.test` — [unexpected error: IO Error: Failed to initialize persistent storage directory. (original] line 21
 - `test/sql/settings/errors_as_json.test` — [statement error: message mismatch] line 11
@@ -109,13 +156,8 @@ rejects-table row count, plus M remnants logging_csv/logging_types).
 - `test/sql/storage/wal/wal_promote_version.test` — [unexpected error: Catalog Error: Table with name T does not exist!] line 32
 - `test/sql/timezone/disable_timestamptz_casts.test` — [unexpected error: Binder Error: Casting from TIMESTAMP to TIMESTAMP WITH TIME ZONE without a] line 22
 - `test/sql/timezone/test_icu_calendar.test` — [wrong result] line 110
-- `test/sql/transactions/statement-preprocessor/multistatement_is_transactional_chained_BEGIN.test` — [statement error: expected error, got success] line 24
-- `test/sql/transactions/statement-preprocessor/multistatement_is_transactional_chained_BEGIN_body_COMMIT.test` — [statement error: expected error, got success] line 24
-- `test/sql/transactions/statement-preprocessor/multistatement_is_transactional_chained_PRAGMA_BEGIN.test` — [statement error: expected error, got success] line 21
-- `test/sql/types/nested/map/map_from_entries/data_types.test` — [statement error: message mismatch] line 125
 - `test/sql/types/timestamp/test_timestamp_tz.test` — [statement error: expected error, got success] line 24
 - `test/sql/types/type/test_make_get_type.test` — [wrong result] line 4
-- `test/sql/window/test_lead_lag.test` — [unexpected error: Out of Range Error: Overflow in subtraction of INT# (# - -#)!] line 121
 
 ---
 
@@ -177,8 +219,8 @@ records that would hit other buckets.
 | `test/sql/join/iejoin/iejoin_projection_maps.test` | ~~Correctness bug: IEJoin returns wrong aggregate~~ **FIXED 2026-06-10 — was the runner dropping `set seed` (unseeded `random()` data), not IEJoin.** See the `set seed` fix note above. | runner |
 | `test/sql/optimizer/predicate_factoring.test` | **Correctness bug**: factoring `(a=1 AND b>3) OR (a=1 AND c<5)` yields `NULL` where DuckDB yields `false`. | engine |
 | `test/sql/aggregate/aggregates/test_quantile_disc.test` | `quantile_disc`/`percentile_disc` with `ORDER BY … DESC` modifier: DuckDB returns its descending-interval result (`1.2`), ours returns the plain discrete element (`1`). | engine |
-| `test/sql/function/operator/test_in_empty_table.test` | `int_col IN ('a','b','c','d','e')` (≥5 elements): DuckDB compares as VARCHAR collection; ours eagerly casts the literals to INT32 and errors. | engine |
-| `test/sql/optimizer/test_in_rewrite_rule.test` | Same IN-list VARCHAR-fallback gap. | engine |
+| `test/sql/function/operator/test_in_empty_table.test` | ~~`int_col IN ('a','b','c','d','e')` (≥5 elements) errors~~ **FIXED 2026-06-10 — exhost catch-all/typed-clause id collision broke the binder's try-cast catch(...) fallback; see the class J fix.** | exhost |
+| `test/sql/optimizer/test_in_rewrite_rule.test` | ~~Same IN-list VARCHAR-fallback gap~~ **FIXED 2026-06-10 — same exhost catch-dispatch fix.** | exhost |
 | `test/sql/types/numeric/uhugeint_try_cast.test` | `UHUGEINT_MAX::FLOAT` → `inf` (cast bug; should be ≈3.4e38). | engine |
 | `test/sql/sample/test_sample_too_big.test` | `TABLESAMPLE RESERVOIR(1000000000)` allocates the full reservoir up front → "Out of Memory Error: Allocation failure"; DuckDB clamps to input size. | engine |
 | `test/sql/json/issues/read_json_memory_usage.test` | Opposite memory problem: `SET memory_limit='50MiB'` is not enforced — the read *succeeds* where DuckDB raises Out of Memory. | engine |

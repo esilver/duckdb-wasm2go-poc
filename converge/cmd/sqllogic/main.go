@@ -1024,6 +1024,14 @@ func (st *execState) execStatement(r *record, subs []sub) error {
 		if _, rawErr = conn.ExecContext(noCtx, part); rawErr != nil {
 			break
 		}
+		// Track explicit transactions PER PART: a multi-statement record like
+		// "BEGIN; <failing stmt>" enters an explicit transaction even though
+		// the record as a whole errors. Native DuckDB leaves that transaction
+		// in the aborted state ("Current transaction is aborted"); issuing the
+		// sacrificial ROLLBACK below would destroy it and make the next record
+		// succeed where it must fail (the three
+		// multistatement_is_transactional_chained_* tests).
+		st.trackTxn(r.conn, part)
 	}
 	if rawErr == nil {
 		if m := setTimeZoneRe.FindStringSubmatch(sqlText); m != nil {
@@ -1046,20 +1054,12 @@ func (st *execState) execStatement(r *record, subs []sub) error {
 		errMsg = decodeEngineError(rawErr.Error())
 	}
 
-	// Track explicit transactions, and work around an ENGINE/DRIVER issue:
-	// a failed statement leaves the connection's (autocommit) transaction
-	// open, so every later statement fails with "cannot start a transaction
-	// within a transaction". When the test was NOT inside an explicit BEGIN,
-	// issue a ROLLBACK to clear the leaked transaction. Counted+reported.
-	upper := strings.ToUpper(strings.TrimSpace(sqlText))
-	if rawErr == nil {
-		switch {
-		case strings.HasPrefix(upper, "BEGIN") || strings.HasPrefix(upper, "START TRANSACTION"):
-			st.inTxn[r.conn] = true
-		case strings.HasPrefix(upper, "COMMIT") || strings.HasPrefix(upper, "ROLLBACK") || strings.HasPrefix(upper, "ABORT"):
-			st.inTxn[r.conn] = false
-		}
-	} else if !st.inTxn[r.conn] {
+	// Work around an ENGINE/DRIVER issue: a failed statement leaves the
+	// connection's (autocommit) transaction open, so every later statement
+	// fails with "cannot start a transaction within a transaction". When the
+	// test was NOT inside an explicit BEGIN (tracked per part above), issue a
+	// ROLLBACK to clear the leaked transaction. Counted+reported.
+	if rawErr != nil && !st.inTxn[r.conn] {
 		// The leaked transaction makes the NEXT statement fail at txn-begin
 		// ("cannot start a transaction within a transaction"), which clears
 		// it. This sacrificial ROLLBACK absorbs that one-shot poison.
@@ -1093,6 +1093,20 @@ func (st *execState) execStatement(r *record, subs []sub) error {
 		}
 	}
 	return nil
+}
+
+// trackTxn updates the per-connection explicit-transaction state after a
+// SUCCESSFULLY executed statement (failed statements never change DuckDB's
+// explicit-tx membership; a failure inside BEGIN aborts the tx but stays in
+// it until ROLLBACK).
+func (st *execState) trackTxn(connName, stmt string) {
+	upper := strings.ToUpper(strings.TrimSpace(stmt))
+	switch {
+	case strings.HasPrefix(upper, "BEGIN") || strings.HasPrefix(upper, "START TRANSACTION"):
+		st.inTxn[connName] = true
+	case strings.HasPrefix(upper, "COMMIT") || strings.HasPrefix(upper, "ROLLBACK") || strings.HasPrefix(upper, "ABORT"):
+		st.inTxn[connName] = false
+	}
 }
 
 var jsonFieldRes = map[string]*regexp.Regexp{}
@@ -1327,6 +1341,7 @@ func (st *execState) execQuery(r *record, subs []sub) error {
 			}
 			return failStop{errorBucket(msg), snip(pre) + "\n=> " + msg, r.line}
 		}
+		st.trackTxn(r.conn, pre) // "BEGIN; SELECT …" query records enter a tx
 	}
 	rows, qErr := conn.QueryContext(noCtx, segs[len(segs)-1])
 	if qErr != nil {

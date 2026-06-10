@@ -220,7 +220,7 @@ func TestHugeintResults(t *testing.T) {
 // LIST<TIMESTAMP-infinity>, ARRAY<INTERVAL>.
 func TestExoticNested(t *testing.T) {
 	expectString(t, "SELECT [INTERVAL 2 DAYS]", "[2 days]")
-	expectString(t, "SELECT {b: '0101'::BIT}", "map[b:0101]")
+	expectString(t, "SELECT {b: '0101'::BIT}", "{'b': 0101}")
 	expectString(t, "SELECT [union_value(num := 1)]", "[1]")
 	expectString(t, "SELECT ['infinity'::TIMESTAMP]", "[infinity]")
 	expectString(t, "SELECT [INTERVAL 2 DAYS]::INTERVAL[1]", "[2 days]")

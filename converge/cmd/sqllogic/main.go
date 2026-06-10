@@ -50,7 +50,7 @@ import (
 	"sync"
 	"time"
 
-	_ "duckdbconverge/duckdb"
+	duckdb "duckdbconverge/duckdb"
 )
 
 // ---------------------------------------------------------------- records
@@ -1534,9 +1534,27 @@ func valueToString(v any) string {
 			parts[i] = nestedToString(e)
 		}
 		return "[" + strings.Join(parts, ", ") + "]"
+	case duckdb.Struct:
+		// STRUCT: DuckDB renders {'a': 1, 'b': x} in DECLARED field order; the
+		// driver's Struct carrier preserves it.
+		parts := make([]string, len(x.Names))
+		for i, k := range x.Names {
+			parts[i] = "'" + k + "': " + nestedToString(x.Values[i])
+		}
+		return "{" + strings.Join(parts, ", ") + "}"
+	case duckdb.MapValue:
+		// MAP: DuckDB renders {key=value, ...} in entry order; the driver's
+		// MapValue carrier preserves it (and admits unhashable LIST/STRUCT keys).
+		parts := make([]string, len(x.Keys))
+		for i, k := range x.Keys {
+			parts[i] = nestedToString(k) + "=" + nestedToString(x.Values[i])
+		}
+		return "{" + strings.Join(parts, ", ") + "}"
 	case map[string]any:
-		// struct (NOTE: Go maps lose DuckDB's field order; multi-field structs
-		// may render in the wrong order — a runner/driver limitation)
+		// Parsed JSON object (JSON result columns decode natively; STRUCTs now
+		// arrive as duckdb.Struct, not maps). Key order is JSON-object
+		// arbitrary; sort for a stable rendering — JSON expected tokens are
+		// compared structurally (jsonEquivalent), not via this string.
 		keys := make([]string, 0, len(x))
 		for k := range x {
 			keys = append(keys, k)
@@ -1545,34 +1563,6 @@ func valueToString(v any) string {
 		parts := make([]string, len(keys))
 		for i, k := range keys {
 			parts[i] = "'" + k + "': " + nestedToString(x[k])
-		}
-		return "{" + strings.Join(parts, ", ") + "}"
-	case map[any]any:
-		// MAP: DuckDB renders {key=value, ...} in insertion order; the Go map
-		// loses that order, so keys are sorted (numeric-aware) — maps whose
-		// corpus order isn't sorted may still mismatch (driver limitation).
-		keys := make([]string, 0, len(x))
-		byKey := make(map[string]any, len(x))
-		for k, v := range x {
-			ks := nestedToString(k)
-			keys = append(keys, ks)
-			byKey[ks] = v
-		}
-		sort.Slice(keys, func(a, b int) bool {
-			ra, oka := new(big.Rat).SetString(keys[a])
-			rb, okb := new(big.Rat).SetString(keys[b])
-			switch {
-			case oka && okb:
-				return ra.Cmp(rb) < 0
-			case oka != okb:
-				return oka // numeric keys before non-numeric (histogram catch-all bucket is last)
-			default:
-				return keys[a] < keys[b]
-			}
-		})
-		parts := make([]string, len(keys))
-		for i, k := range keys {
-			parts[i] = k + "=" + nestedToString(byKey[k])
 		}
 		return "{" + strings.Join(parts, ", ") + "}"
 	default:

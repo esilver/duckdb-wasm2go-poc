@@ -7,29 +7,38 @@ import (
 	"testing"
 )
 
-// TestStructResultColumns: native STRUCT result columns must scan as
-// map[string]any of decoded fields (duckdb-go's STRUCT shape). Regression:
-// they decoded to nil (the flat decode path had no STRUCT case), so e.g.
-// approx_top_k's LIST-of-STRUCT cells came back as [NULL, ...].
+// TestStructResultColumns: native STRUCT result columns must scan as the
+// ordered Struct carrier (declared field order — Go maps lose it and the
+// sqllogic runner rendered fields sorted). Regression history: STRUCT cells
+// first decoded to nil (the flat decode path had no STRUCT case), then to
+// map[string]any (order lost).
 func TestStructResultColumns(t *testing.T) {
 	c, done := bandConn(t)
 	defer done()
 	ctx := context.Background()
 
 	var v any
-	if err := c.QueryRowContext(ctx, "SELECT {'a': 1, 'b': 'x'}").Scan(&v); err != nil {
+	if err := c.QueryRowContext(ctx, "SELECT {'b': 'x', 'a': 1}").Scan(&v); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]any{"a": int64(1), "b": "x"}
+	// Declared order ('b' before 'a') must be preserved.
+	want := Struct{Names: []string{"b", "a"}, Values: []any{"x", int64(1)}}
 	if !reflect.DeepEqual(v, want) {
 		t.Fatalf("struct result: got %T %#v, want %#v", v, v, want)
+	}
+	// Map() is the duckdb-go convenience shape.
+	if m := v.(Struct).Map(); !reflect.DeepEqual(m, map[string]any{"a": int64(1), "b": "x"}) {
+		t.Fatalf("Struct.Map(): got %#v", m)
 	}
 
 	// LIST of STRUCT recurses (the approx_top_k shape).
 	if err := c.QueryRowContext(ctx, "SELECT [{'i': 1}, {'i': 2}]").Scan(&v); err != nil {
 		t.Fatal(err)
 	}
-	wantList := []any{map[string]any{"i": int64(1)}, map[string]any{"i": int64(2)}}
+	wantList := []any{
+		Struct{Names: []string{"i"}, Values: []any{int64(1)}},
+		Struct{Names: []string{"i"}, Values: []any{int64(2)}},
+	}
 	if !reflect.DeepEqual(v, wantList) {
 		t.Fatalf("list-of-struct result: got %#v, want %#v", v, wantList)
 	}
@@ -38,12 +47,12 @@ func TestStructResultColumns(t *testing.T) {
 	if err := c.QueryRowContext(ctx, "SELECT {'l': [1,2]}").Scan(&v); err != nil {
 		t.Fatal(err)
 	}
-	wantNested := map[string]any{"l": []any{int64(1), int64(2)}}
+	wantNested := Struct{Names: []string{"l"}, Values: []any{[]any{int64(1), int64(2)}}}
 	if !reflect.DeepEqual(v, wantNested) {
 		t.Fatalf("struct-with-list result: got %#v, want %#v", v, wantNested)
 	}
 
-	// NULL struct cell decodes to nil; NULL field decodes to a nil map value.
+	// NULL struct cell decodes to nil; NULL field decodes to a nil field value.
 	if err := c.QueryRowContext(ctx, "SELECT CAST(NULL AS STRUCT(a INT))").Scan(&v); err != nil {
 		t.Fatal(err)
 	}
@@ -53,12 +62,12 @@ func TestStructResultColumns(t *testing.T) {
 	if err := c.QueryRowContext(ctx, "SELECT {'a': NULL, 'b': 2}").Scan(&v); err != nil {
 		t.Fatal(err)
 	}
-	wantNullField := map[string]any{"a": nil, "b": int64(2)}
+	wantNullField := Struct{Names: []string{"a", "b"}, Values: []any{nil, int64(2)}}
 	if !reflect.DeepEqual(v, wantNullField) {
 		t.Fatalf("struct with NULL field: got %#v, want %#v", v, wantNullField)
 	}
 
-	t.Logf("STRUCT result columns scan as map[string]any (flat, nested, NULLs) ✓")
+	t.Logf("STRUCT result columns scan as ordered Struct (flat, nested, NULLs) ✓")
 }
 
 // TestStructResultApproxTopK: smoke the DuckDB-corpus shape that exposed the
@@ -78,32 +87,46 @@ func TestStructResultApproxTopK(t *testing.T) {
 		t.Fatalf("approx_top_k result: got %T %#v, want non-empty []any", v, v)
 	}
 	for i, e := range l {
-		m, ok := e.(map[string]any)
+		s, ok := e.(Struct)
 		if !ok {
-			t.Fatalf("approx_top_k elem %d: got %T %#v, want map[string]any", i, e, e)
+			t.Fatalf("approx_top_k elem %d: got %T %#v, want Struct", i, e, e)
 		}
-		if m["i"] != int64(8) {
-			t.Fatalf("approx_top_k elem %d: got %#v, want {'i': 8}", i, m)
+		if s.Map()["i"] != int64(8) {
+			t.Fatalf("approx_top_k elem %d: got %#v, want {'i': 8}", i, s)
 		}
 	}
-	t.Logf("approx_top_k scans as []map[string]any: %v ✓", v)
+	t.Logf("approx_top_k scans as []Struct: %v ✓", v)
 }
 
-// TestMapResultColumns: native MAP result columns scan as map[any]any (MAP is
-// physically a LIST of {key, value} STRUCTs; decoding fell out of the STRUCT
-// work).
+// TestMapResultColumns: native MAP result columns scan as the ordered MapValue
+// carrier (MAP is physically a LIST of {key, value} STRUCTs). The carrier
+// preserves DuckDB's entry order and admits unhashable keys, which the previous
+// map[any]any shape could not (LIST-keyed maps decoded to nil).
 func TestMapResultColumns(t *testing.T) {
 	c, done := bandConn(t)
 	defer done()
 	ctx := context.Background()
 
 	var v any
-	if err := c.QueryRowContext(ctx, "SELECT MAP {'k1': 1, 'k2': 2}").Scan(&v); err != nil {
+	if err := c.QueryRowContext(ctx, "SELECT MAP {'k2': 2, 'k1': 1}").Scan(&v); err != nil {
 		t.Fatal(err)
 	}
-	want := map[any]any{"k1": int64(1), "k2": int64(2)}
+	// Entry order preserved ('k2' first).
+	want := MapValue{Keys: []any{"k2", "k1"}, Values: []any{int64(2), int64(1)}}
 	if !reflect.DeepEqual(v, want) {
 		t.Fatalf("map result: got %T %#v, want %#v", v, v, want)
+	}
+
+	// Unhashable (LIST) keys are fine in the carrier.
+	if err := c.QueryRowContext(ctx, "SELECT MAP {[1,2,3]: 'test'}").Scan(&v); err != nil {
+		t.Fatal(err)
+	}
+	wantListKey := MapValue{
+		Keys:   []any{[]any{int64(1), int64(2), int64(3)}},
+		Values: []any{"test"},
+	}
+	if !reflect.DeepEqual(v, wantListKey) {
+		t.Fatalf("list-keyed map result: got %T %#v, want %#v", v, v, wantListKey)
 	}
 
 	// NULL map and NULL value.
@@ -116,15 +139,16 @@ func TestMapResultColumns(t *testing.T) {
 	if err := c.QueryRowContext(ctx, "SELECT MAP {'k': NULL}").Scan(&v); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(v, map[any]any{"k": nil}) {
+	if !reflect.DeepEqual(v, MapValue{Keys: []any{"k"}, Values: []any{nil}}) {
 		t.Fatalf("map with NULL value: got %#v", v)
 	}
 
-	t.Logf("MAP result columns scan as map[any]any ✓")
+	t.Logf("MAP result columns scan as ordered MapValue ✓")
 }
 
 // TestStructUDFArg: vecDecoder is shared with the UDF argument path, so STRUCT
-// arguments now decode to map[string]any there too (they were nil before).
+// arguments decode to the ordered Struct carrier there too (they were nil
+// before vecDecoder, then map[string]any).
 func TestStructUDFArg(t *testing.T) {
 	mod := newModule()
 	con, _, err := mod.open(":memory:")
@@ -132,22 +156,24 @@ func TestStructUDFArg(t *testing.T) {
 		t.Fatal(err)
 	}
 	probe := func(args []any) (any, error) {
-		m, ok := args[0].(map[string]any)
+		s, ok := args[0].(Struct)
 		if !ok {
 			return fmt.Sprintf("BAD %T", args[0]), nil
 		}
-		return fmt.Sprintf("a=%v b=%v", m["a"], m["b"]), nil
+		m := s.Map()
+		return fmt.Sprintf("a=%v b=%v order=%v", m["a"], m["b"], s.Names), nil
 	}
 	if err := mod.registerScalarEx(con, "struct_probe", nil, dtVarchar, dtAny, true, false, probe); err != nil {
 		t.Fatal(err)
 	}
 	res := mod.allocOut(sizeofDuckdbResult)
-	sql := `SELECT struct_probe({'a': 7, 'b': 'q'})`
+	sql := `SELECT struct_probe({'b': 'q', 'a': 7})`
 	if rc := mod.m.Xduckdb_query(con, mod.cstring(sql), res); rc != 0 {
 		t.Fatalf("%s: %s", sql, mod.lastError())
 	}
-	if got := mod.goString(mod.m.Xduckdb_value_varchar(res, 0, 0)); got != "a=7 b=q" {
-		t.Fatalf("struct UDF arg: got %q, want %q", got, "a=7 b=q")
+	want := "a=7 b=q order=[b a]"
+	if got := mod.goString(mod.m.Xduckdb_value_varchar(res, 0, 0)); got != want {
+		t.Fatalf("struct UDF arg: got %q, want %q", got, want)
 	}
-	t.Logf("STRUCT UDF argument decodes to map[string]any ✓")
+	t.Logf("STRUCT UDF argument decodes to ordered Struct ✓")
 }

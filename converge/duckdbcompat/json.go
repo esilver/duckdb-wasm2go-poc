@@ -13,6 +13,7 @@ package duckdbcompat
 
 import (
 	"database/sql/driver"
+	"reflect"
 
 	convergeduckdb "duckdbconverge/duckdb"
 )
@@ -24,10 +25,14 @@ import (
 func jsonNative(s string) any { return convergeduckdb.DecodeJSONNative(s) }
 
 // jsonAwareExecutor wraps a RowExecutor so JSONValue arguments arrive parsed,
-// duckdb-go style. The normalization recurses into []any arguments (LIST cells
-// decode to []any and their elements can be JSON-alias cells — e.g. array_agg
-// over a json_each column, the STRING_AGG lowering's shape). Non-JSON
-// arguments pass through untouched.
+// duckdb-go style, and the engine's ordered nested carriers (Struct/MapValue,
+// engine nested.go) arrive as the Go maps duckdb-go delivers (STRUCT ->
+// map[string]any, MAP -> map[any]any — googlesqlite's internal/value
+// DecodeValue switches on exactly those shapes). The normalization recurses
+// into []any arguments (LIST cells decode to []any and their elements can be
+// JSON-alias cells — e.g. array_agg over a json_each column, the STRING_AGG
+// lowering's shape) and into the carriers' field/entry values. Everything else
+// passes through untouched.
 func jsonAwareExecutor(fn func(values []driver.Value) (any, error)) func(values []driver.Value) (any, error) {
 	return func(values []driver.Value) (any, error) {
 		for i, v := range values {
@@ -37,8 +42,11 @@ func jsonAwareExecutor(fn func(values []driver.Value) (any, error)) func(values 
 	}
 }
 
-// normalizeJSONArg rewrites JSONValue nodes (recursively through []any) to
-// their parsed native form.
+// normalizeJSONArg rewrites JSONValue nodes (recursively through []any and the
+// nested carriers) to their parsed native form, and converts the engine's
+// ordered Struct/MapValue carriers to duckdb-go's map shapes. A MapValue whose
+// (normalized) keys are not all hashable cannot become a map[any]any; it passes
+// through as the carrier (best effort — duckdb-go itself cannot scan such maps).
 func normalizeJSONArg(v driver.Value) driver.Value {
 	switch t := v.(type) {
 	case convergeduckdb.JSONValue:
@@ -48,6 +56,34 @@ func normalizeJSONArg(v driver.Value) driver.Value {
 			t[i] = normalizeJSONArg(t[i])
 		}
 		return t
+	case convergeduckdb.Struct:
+		m := make(map[string]any, len(t.Names))
+		for i, n := range t.Names {
+			m[n] = normalizeJSONArg(t.Values[i])
+		}
+		return m
+	case convergeduckdb.MapValue:
+		for i := range t.Keys {
+			t.Keys[i] = normalizeJSONArg(t.Keys[i])
+			t.Values[i] = normalizeJSONArg(t.Values[i])
+		}
+		m := make(map[any]any, len(t.Keys))
+		for i, k := range t.Keys {
+			if !hashableKey(k) {
+				return t // unhashable key (LIST/STRUCT/...): keep the carrier
+			}
+			m[k] = t.Values[i]
+		}
+		return m
 	}
 	return v
+}
+
+// hashableKey reports whether a normalized MAP key can be used as a Go map key
+// (decoded LIST/STRUCT/BLOB keys are slices/maps and would panic on insert).
+func hashableKey(k any) bool {
+	if k == nil {
+		return true
+	}
+	return reflect.TypeOf(k).Comparable()
 }

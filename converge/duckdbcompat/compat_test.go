@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
+	"sort"
+	"strings"
 	"testing"
 
-	_ "duckdbconverge/duckdb" // registers the "duckdb" database/sql driver
+	convergeduckdb "duckdbconverge/duckdb" // registers the "duckdb" database/sql driver
 	dc "github.com/duckdb/duckdb-go/v2"
 )
 
@@ -94,4 +96,98 @@ func TestCompatScalarFacade(t *testing.T) {
 	}
 	fmt.Println("compat façade OK: fixed scalar=42, variadic-ANY count=5, NULL propagated")
 	t.Logf("compat façade end-to-end: scalar + variadic-ANY + NULL ✓")
+}
+
+// shapeProbe is a VARIADIC-ANY scalar UDF that reports the Go shape its first
+// argument arrives as. It proves the compat layer converts the engine's ordered
+// Struct/MapValue carriers to duckdb-go's map shapes (googlesqlite's
+// internal/value.DecodeValue switches on map[string]any), except for maps with
+// unhashable keys, which keep the carrier.
+type shapeProbe struct{}
+
+func (shapeProbe) Config() dc.ScalarFuncConfig {
+	vc, _ := dc.NewTypeInfo(dc.TYPE_VARCHAR)
+	anyT, _ := dc.NewTypeInfo(dc.TYPE_ANY)
+	return dc.ScalarFuncConfig{
+		ResultTypeInfo:      vc,
+		VariadicTypeInfo:    anyT,
+		SpecialNullHandling: true,
+	}
+}
+func (shapeProbe) Executor() dc.ScalarFuncExecutor {
+	return dc.ScalarFuncExecutor{RowExecutor: func(vals []driver.Value) (any, error) {
+		switch v := vals[0].(type) {
+		case map[string]any:
+			keys := make([]string, 0, len(v))
+			for k := range v {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			parts := make([]string, len(keys))
+			for i, k := range keys {
+				parts[i] = fmt.Sprintf("%s=%v", k, v[k])
+			}
+			return "struct-map{" + strings.Join(parts, " ") + "}", nil
+		case map[any]any:
+			parts := make([]string, 0, len(v))
+			for k, val := range v {
+				parts = append(parts, fmt.Sprintf("%v=%v", k, val))
+			}
+			sort.Strings(parts)
+			return "map-map{" + strings.Join(parts, " ") + "}", nil
+		case convergeduckdb.MapValue:
+			return fmt.Sprintf("carrier%v", v), nil
+		case []any:
+			parts := make([]string, len(v))
+			for i, e := range v {
+				parts[i] = fmt.Sprintf("%T", e)
+			}
+			return "list[" + strings.Join(parts, " ") + "]", nil
+		default:
+			return fmt.Sprintf("other:%T", vals[0]), nil
+		}
+	}}
+}
+
+// TestCompatNestedCarrierConversion: the jsonAware/normalize path must hand
+// duckdb-go consumers map shapes for STRUCT and (hashable-key) MAP arguments,
+// and pass the MapValue carrier through for unhashable keys.
+func TestCompatNestedCarrierConversion(t *testing.T) {
+	db, err := sql.Open("duckdb", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	c, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	if err := dc.RegisterScalarUDF(c, "compat_shape", shapeProbe{}); err != nil {
+		t.Fatalf("register shape probe: %v", err)
+	}
+
+	q := func(sql string) string {
+		var v string
+		if err := c.QueryRowContext(context.Background(), sql).Scan(&v); err != nil {
+			t.Fatalf("query %q: %v", sql, err)
+		}
+		return v
+	}
+	if got := q("SELECT compat_shape({'b': 'x', 'a': 1})"); got != "struct-map{a=1 b=x}" {
+		t.Fatalf("struct arg: got %q", got)
+	}
+	if got := q("SELECT compat_shape(MAP {'k1': 1, 'k2': 2})"); got != "map-map{k1=1 k2=2}" {
+		t.Fatalf("map arg: got %q", got)
+	}
+	// Unhashable (LIST) keys: the ordered carrier passes through.
+	if got := q("SELECT compat_shape(MAP {[1,2]: 'v'})"); got != "carrier{[1 2]=v}" {
+		t.Fatalf("list-keyed map arg: got %q", got)
+	}
+	// Nested: a struct inside a LIST converts element-wise.
+	if got := q("SELECT compat_shape([{'a': 1}])"); got != "list[map[string]interface {}]" {
+		t.Fatalf("list-of-struct arg shape: got %q", got)
+	}
+	t.Logf("compat nested-carrier conversion: STRUCT->map[string]any, MAP->map[any]any, unhashable keys keep carrier ✓")
 }

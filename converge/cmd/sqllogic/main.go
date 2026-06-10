@@ -183,7 +183,7 @@ func main() {
 				break
 			}
 			for i, v := range vals {
-				fmt.Printf("col %d: %T %q -> %s\n", i+1, v, fmt.Sprint(v), valueToString(v, types[i], nil))
+				fmt.Printf("col %d: %T %q -> %s\n", i+1, v, fmt.Sprint(v), valueToString(v, types[i], renderCtx{}))
 			}
 		}
 		rows.Close()
@@ -322,8 +322,8 @@ func parseFile(path string) ([]record, error) {
 	p := &parser{lines: lines}
 
 	var root []record
-	stack := []*[]record{&root}     // innermost loop body last
-	loopStack := []*record{}        // parallel to stack[1:]
+	stack := []*[]record{&root} // innermost loop body last
+	loopStack := []*record{}    // parallel to stack[1:]
 	var pendingConds []condition
 
 	appendRec := func(r record) {
@@ -662,6 +662,7 @@ type execState struct {
 	testName    string
 	testUUID    string
 	tz          *time.Location // session TimeZone (tracked from successful SET TimeZone)
+	hybridCal   bool           // non-default SET Calendar active (ICU hybrid Julian/Gregorian TZ rendering)
 
 	recRun        int
 	recPassed     int
@@ -670,6 +671,15 @@ type execState struct {
 }
 
 type sub struct{ name, val string }
+
+// renderCtx carries the session state value rendering depends on: the
+// TimeZone for TIMESTAMPTZ and whether a non-default ICU Calendar is active.
+type renderCtx struct {
+	tz        *time.Location
+	hybridCal bool
+}
+
+func (st *execState) rctx() renderCtx { return renderCtx{st.tz, st.hybridCal} }
 
 func executeFile(path string) fileResult {
 	recs, err := parseFile(path)
@@ -702,7 +712,7 @@ func executeFile(path string) fileResult {
 		labelHashes: map[string]string{},
 		testDir:     scratch,
 		testName:    relPath(path),
-		testUUID:    fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		testUUID: fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
 			time.Now().UnixNano()&0xffffffff, os.Getpid()&0xffff, 0x4000, 0x8000, time.Now().UnixNano()),
 	}
 	defer func() {
@@ -751,8 +761,26 @@ func (st *execState) execRecords(recs []record, subs []sub) error {
 				}
 			}
 		case recForeach:
+			// Multi-variable form (sqllogic_test_runner.cpp ReplaceLoopIterator):
+			// `foreach type,min,max tinyint,-128,127 ...` — comma-separated names,
+			// each token comma-split into the same arity (StringUtil::Split drops
+			// empty fields, which the corpus exploits to embed trailing commas).
+			names := strings.Split(r.loopVar, ",")
 			for _, tokv := range r.loopTokens {
-				err := st.execRecords(r.body, append(subs, sub{r.loopVar, tokv}))
+				ns := subs
+				if len(names) > 1 {
+					parts := dropEmpty(strings.Split(tokv, ","))
+					if len(parts) != len(names) {
+						return failStop{"runner error",
+							fmt.Sprintf("foreach loop: iterator %q arity does not match token %q", r.loopVar, tokv), r.line}
+					}
+					for i := range names {
+						ns = append(ns, sub{names[i], parts[i]})
+					}
+				} else {
+					ns = append(ns, sub{r.loopVar, tokv})
+				}
+				err := st.execRecords(r.body, ns)
 				if err != nil {
 					return err
 				}
@@ -948,6 +976,10 @@ var threadsStmtRe = regexp.MustCompile(`(?is)^\s*(?:pragma\s+(?:threads|worker_t
 var (
 	setTimeZoneRe   = regexp.MustCompile(`(?is)^\s*set\s+(?:session\s+|local\s+|global\s+)?time\s*zone\s*(?:=|to)?\s*'([^']*)'`)
 	resetTimeZoneRe = regexp.MustCompile(`(?is)^\s*reset\s+time\s*zone`)
+	// SET Calendar / PRAGMA CALENDAR: a non-default calendar switches the
+	// engine's TIMESTAMPTZ->VARCHAR cast to ICU's hybrid Julian/Gregorian
+	// calendars (test_icu_calendar); the default cast is proleptic Gregorian.
+	setCalendarRe = regexp.MustCompile(`(?is)^\s*(?:set|pragma)\s+(?:session\s+|local\s+|global\s+)?calendar\s*(?:=|to)?\s*'([^']*)'`)
 )
 
 func (st *execState) execStatement(r *record, subs []sub) error {
@@ -984,11 +1016,16 @@ func (st *execState) execStatement(r *record, subs []sub) error {
 		if m := setTimeZoneRe.FindStringSubmatch(sqlText); m != nil {
 			if loc, lerr := time.LoadLocation(m[1]); lerr == nil {
 				st.tz = loc
+			} else if loc := fixedUTCZone(m[1]); loc != nil {
+				st.tz = loc
 			} else {
 				st.tz = nil
 			}
 		} else if resetTimeZoneRe.MatchString(sqlText) {
 			st.tz = nil
+		}
+		if m := setCalendarRe.FindStringSubmatch(sqlText); m != nil {
+			st.hybridCal = m[1] != "" && !strings.EqualFold(m[1], "gregorian")
 		}
 	}
 	var errMsg string
@@ -1347,7 +1384,7 @@ func (st *execState) execQuery(r *record, subs []sub) error {
 		// convert all values, apply sort, hash
 		strs := make([]string, len(resultVals))
 		for i, v := range resultVals {
-			strs[i] = valueToString(v, colTypes[i%ncols], st.tz)
+			strs[i] = valueToString(v, colTypes[i%ncols], st.rctx())
 		}
 		applySort(r.sortStyle, strs, ncols)
 		h := md5.New()
@@ -1397,7 +1434,7 @@ func (st *execState) execQuery(r *record, subs []sub) error {
 
 	actStrs := make([]string, len(resultVals))
 	for i, v := range resultVals {
-		actStrs[i] = valueToString(v, colTypes[i%ncols], st.tz)
+		actStrs[i] = valueToString(v, colTypes[i%ncols], st.rctx())
 	}
 	sortedVals := resultVals
 	if r.sortStyle != "" {
@@ -1411,7 +1448,7 @@ func (st *execState) execQuery(r *record, subs []sub) error {
 		if i >= len(sortedVals) {
 			break
 		}
-		if !compareValue(sortedVals[i], actStrs[i], expValues[i], st.tz) {
+		if !compareValue(sortedVals[i], actStrs[i], expValues[i], st.rctx()) {
 			row, col := i/ncols, i%ncols
 			return failStop{failWrongResult,
 				fmt.Sprintf("%s\nmismatch row %d col %d: %s <> %s",
@@ -1449,7 +1486,15 @@ func normalizeExpected(lines []string, ncols, nrows int) (vals []string, rowWise
 		for i, l := range lines {
 			parts := strings.Split(l, "\t")
 			if len(parts) != ncols {
-				return nil, true, fmt.Sprintf("expected row %d has %d tab-separated values, want %d columns", i+1, len(parts), ncols)
+				// The C++ runner splits with StringUtil::Split(line, "\t"), which
+				// DROPS empty fields — upstream expected blocks legitimately contain
+				// alignment tabs ("Bob\t\t6.5") and trailing tabs ("...\t89\t").
+				// An intentionally empty cell can't be expressed that way upstream
+				// either (it renders "(empty)"), so dropping empties is lossless.
+				parts = dropEmpty(parts)
+				if len(parts) != ncols {
+					return nil, true, fmt.Sprintf("expected row %d has %d tab-separated values, want %d columns", i+1, len(parts), ncols)
+				}
 			}
 			vals = append(vals, parts...)
 		}
@@ -1459,6 +1504,18 @@ func normalizeExpected(lines []string, ncols, nrows int) (vals []string, rowWise
 		return nil, false, fmt.Sprintf("%d expected values not divisible by %d columns", len(lines), ncols)
 	}
 	return lines, false, ""
+}
+
+// dropEmpty filters empty strings out of parts, mirroring DuckDB's
+// StringUtil::Split(str, "\t") / Split(str, ",") semantics.
+func dropEmpty(parts []string) []string {
+	out := parts[:0:0]
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // applySort sorts a flat value-string slice per sqllogictest sort styles.
@@ -1555,6 +1612,10 @@ const (
 	// float32 carrier); rendering must round back through float32 to get
 	// DuckDB's shortest-roundtrip form (-3.4e+38, not -3.39999995e+38).
 	faceFloat32
+	// faceVariant: VARIANT cells decode to their final VARCHAR-cast string in
+	// the driver; at nested positions they render RAW (the nested cast never
+	// quotes VARIANT children).
+	faceVariant
 )
 
 // colType is the parsed shape of one column's DuckDB type name: the temporal
@@ -1636,6 +1697,8 @@ func parseColType(s string) *colType {
 		return &colType{face: faceTimestampTZ}
 	case "FLOAT":
 		return &colType{face: faceFloat32}
+	case "VARIANT":
+		return &colType{face: faceVariant}
 	}
 	return &colType{}
 }
@@ -1724,7 +1787,7 @@ func stripFieldName(p string) string {
 // (empty), \0 escaping; everything else like DuckDB's VARCHAR cast. t is the
 // column's parsed type (nil = unknown: temporal faces fall back to heuristics)
 // and tz the tracked session TimeZone for TIMESTAMPTZ rendering.
-func valueToString(v any, t *colType, tz *time.Location) string {
+func valueToString(v any, t *colType, rc renderCtx) string {
 	switch x := v.(type) {
 	case nil:
 		return "NULL"
@@ -1751,14 +1814,14 @@ func valueToString(v any, t *colType, tz *time.Location) string {
 		}
 		return blobToString(x)
 	case time.Time:
-		return formatTemporal(x, t, tz)
+		return formatTemporal(x, t, rc)
 	case *big.Int:
 		return x.String()
 	case []any, duckdb.Struct, duckdb.MapValue, map[string]any:
 		// The framework's \0 sanitization applies to the final converted
 		// string, AFTER container quoting/escaping (a NUL is not a quote
 		// trigger natively, so escaping never sees the substitute text).
-		return strings.ReplaceAll(containerToString(v, t, tz), "\x00", "\\0")
+		return strings.ReplaceAll(containerToString(v, t, rc), "\x00", "\\0")
 	default:
 		return fmt.Sprint(x)
 	}
@@ -1769,7 +1832,7 @@ func valueToString(v any, t *colType, tz *time.Location) string {
 // map_cast.cpp): children that are themselves nested render raw; scalar
 // children render via their VARCHAR cast and are then quoted/escaped per
 // NestedToVarcharCast's lookup table (see quoteNested).
-func containerToString(v any, t *colType, tz *time.Location) string {
+func containerToString(v any, t *colType, rc renderCtx) string {
 	switch x := v.(type) {
 	case []any:
 		parts := make([]string, len(x))
@@ -1782,7 +1845,7 @@ func containerToString(v any, t *colType, tz *time.Location) string {
 				parts[i] = string(jv)
 				continue
 			}
-			parts[i] = nestedToString(e, t.elemType(), tz)
+			parts[i] = nestedToString(e, t.elemType(), rc)
 		}
 		return "[" + strings.Join(parts, ", ") + "]"
 	case duckdb.Struct:
@@ -1798,7 +1861,7 @@ func containerToString(v any, t *colType, tz *time.Location) string {
 		}
 		parts := make([]string, len(x.Names))
 		for i := range x.Names {
-			parts[i] = nestedToString(x.Values[i], t.fieldType(i), tz)
+			parts[i] = nestedToString(x.Values[i], t.fieldType(i), rc)
 			if !unnamed {
 				parts[i] = escapeNestedQuoted(x.Names[i]) + ": " + parts[i]
 			}
@@ -1810,7 +1873,7 @@ func containerToString(v any, t *colType, tz *time.Location) string {
 	case duckdb.MapValue:
 		parts := make([]string, len(x.Keys))
 		for i, k := range x.Keys {
-			parts[i] = nestedToString(k, t.keyType(), tz) + "=" + nestedToString(x.Values[i], t.valType(), tz)
+			parts[i] = nestedToString(k, t.keyType(), rc) + "=" + nestedToString(x.Values[i], t.valType(), rc)
 		}
 		return "{" + strings.Join(parts, ", ") + "}"
 	case map[string]any:
@@ -1825,7 +1888,7 @@ func containerToString(v any, t *colType, tz *time.Location) string {
 		sort.Strings(keys)
 		parts := make([]string, len(keys))
 		for i, k := range keys {
-			parts[i] = "'" + k + "': " + nestedToString(x[k], nil, tz)
+			parts[i] = "'" + k + "': " + nestedToString(x[k], nil, rc)
 		}
 		return "{" + strings.Join(parts, ", ") + "}"
 	}
@@ -1835,12 +1898,12 @@ func containerToString(v any, t *colType, tz *time.Location) string {
 // nestedToString renders one child value inside a LIST/STRUCT/MAP: nested
 // children recurse unquoted, scalar children render via their VARCHAR cast and
 // then pass through DuckDB's quote-if-needed rule.
-func nestedToString(v any, t *colType, tz *time.Location) string {
+func nestedToString(v any, t *colType, rc renderCtx) string {
 	switch x := v.(type) {
 	case nil:
 		return "NULL"
 	case []any, duckdb.Struct, duckdb.MapValue, map[string]any:
-		return containerToString(v, t, tz)
+		return containerToString(v, t, rc)
 	case bool:
 		if x {
 			return "true"
@@ -1851,13 +1914,16 @@ func nestedToString(v any, t *colType, tz *time.Location) string {
 	case float64:
 		return formatFloatFace(x, t) // never contains quote triggers
 	case string:
+		if t != nil && t.face == faceVariant {
+			return x // VARIANT child: pre-rendered, never quoted by the nested cast
+		}
 		return quoteNested(x)
 	case duckdb.JSONValue:
 		return quoteNested(string(x))
 	case []byte:
 		return quoteNested(blobToString(x))
 	case time.Time:
-		return quoteNested(formatTemporal(x, t, tz))
+		return quoteNested(formatTemporal(x, t, rc))
 	default:
 		// Interval, Decimal, *big.Int, ... — fmt.Stringer/VARCHAR-cast forms,
 		// quote-checked like any scalar ('00:00:01.5' has a ':').
@@ -1893,7 +1959,7 @@ func nestedNeedsQuotes(s string) bool {
 func isSpaceByte(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
 
 // escapeNestedQuoted single-quotes s, backslash-escaping embedded ' and \
-// (WriteEscapedString writes \' and \\, NOT SQL '' doubling).
+// (WriteEscapedString writes \' and \\, NOT SQL quote-doubling).
 func escapeNestedQuoted(s string) string {
 	var sb strings.Builder
 	sb.WriteByte('\'')
@@ -1913,7 +1979,7 @@ func escapeNestedQuoted(s string) string {
 // prints midnight timestamps as "... 00:00:00"), TIMESTAMPTZ in the session
 // zone with DuckDB's offset suffix. Unknown face falls back to the legacy
 // midnight-is-a-date heuristic (formatTimeValue).
-func formatTemporal(x time.Time, t *colType, tz *time.Location) string {
+func formatTemporal(x time.Time, t *colType, rc renderCtx) string {
 	face := faceNone
 	if t != nil {
 		face = t.face
@@ -1929,11 +1995,20 @@ func formatTemporal(x time.Time, t *colType, tz *time.Location) string {
 	case faceTimestamp:
 		return formatYMD(x) + " " + x.Format("15:04:05") + fracStr(x)
 	case faceTimestampTZ:
+		tz := rc.tz
 		if tz == nil {
 			tz = time.UTC
 		}
 		lx := x.In(tz)
-		return formatYMD(lx) + " " + lx.Format("15:04:05") + fracStr(lx) + offsetSuffix(lx)
+		ymd := formatYMD(lx)
+		if rc.hybridCal {
+			// A non-default SET Calendar routes the engine's TIMESTAMPTZ ->
+			// VARCHAR cast through ICU, whose calendars are hybrid
+			// Julian/Gregorian (pre-1582 instants render as Julian dates).
+			// The default cast is proleptic Gregorian (test_infinite_time).
+			ymd = formatYMDHybrid(lx)
+		}
+		return ymd + " " + lx.Format("15:04:05") + fracStr(lx) + offsetSuffix(lx)
 	}
 	return formatTimeValue(x)
 }
@@ -2018,6 +2093,80 @@ func specialDate(t time.Time) string {
 	return ""
 }
 
+// fixedUTCZone parses the UTC±HH[:MM] / GMT±HH[:MM] fixed-offset TimeZone
+// spellings ICU accepts ("UTC-0800", "UTC-08", "UTC-8", "UTC-08:00") that are
+// not tzdata names. The sign is the literal UTC offset (UTC-8 == Etc/GMT+8).
+func fixedUTCZone(name string) *time.Location {
+	s := name
+	switch {
+	case strings.HasPrefix(s, "UTC"), strings.HasPrefix(s, "GMT"):
+		s = s[3:]
+	default:
+		return nil
+	}
+	if len(s) < 2 || (s[0] != '+' && s[0] != '-') {
+		return nil
+	}
+	neg := s[0] == '-'
+	s = s[1:]
+	s = strings.ReplaceAll(s, ":", "")
+	if !allDigits(s) || len(s) == 0 || len(s) > 4 {
+		return nil
+	}
+	var hh, mm int
+	if len(s) <= 2 {
+		hh, _ = strconv.Atoi(s)
+	} else {
+		hh, _ = strconv.Atoi(s[:len(s)-2])
+		mm, _ = strconv.Atoi(s[len(s)-2:])
+	}
+	if hh > 15 || mm > 59 {
+		return nil
+	}
+	off := hh*3600 + mm*60
+	if neg {
+		off = -off
+	}
+	return time.FixedZone(name, off)
+}
+
+// formatYMDHybrid renders the date part the way ICU's default (hybrid
+// Julian/Gregorian) calendar does — DuckDB's TIMESTAMPTZ -> VARCHAR cast goes
+// through ICU, which switches to the JULIAN calendar for instants before the
+// 1582-10-15 Gregorian cutover (JDN 2299161). Go's time.Time is proleptic
+// Gregorian, so earlier dates must be re-derived from the Julian day number.
+func formatYMDHybrid(t time.Time) string {
+	y, m, d := t.Date()
+	// Gregorian -> JDN (valid for all astronomical years, floor semantics).
+	a := floorDiv(int64(14-int(m)), 12)
+	y2 := int64(y) + 4800 - a
+	m2 := int64(int(m)) + 12*a - 3
+	jdn := int64(d) + floorDiv(153*m2+2, 5) + 365*y2 + floorDiv(y2, 4) - floorDiv(y2, 100) + floorDiv(y2, 400) - 32045
+	if jdn >= 2299161 {
+		return formatYMD(t)
+	}
+	// JDN -> Julian calendar date.
+	c := jdn + 32082
+	d2 := floorDiv(4*c+3, 1461)
+	e := c - floorDiv(1461*d2, 4)
+	m3 := floorDiv(5*e+2, 153)
+	day := e - floorDiv(153*m3+2, 5) + 1
+	month := m3 + 3 - 12*floorDiv(m3, 10)
+	year := d2 - 4800 + floorDiv(m3, 10)
+	if year <= 0 {
+		return fmt.Sprintf("%04d-%02d-%02d (BC)", 1-year, month, day)
+	}
+	return fmt.Sprintf("%04d-%02d-%02d", year, month, day)
+}
+
+func floorDiv(a, b int64) int64 {
+	q := a / b
+	if (a%b != 0) && ((a < 0) != (b < 0)) {
+		q--
+	}
+	return q
+}
+
 // formatYMD renders the date part like DuckDB's DATE->VARCHAR cast, including
 // the " (BC)" suffix for non-positive (astronomical) years.
 func formatYMD(t time.Time) string {
@@ -2091,7 +2240,7 @@ func fracStr(t time.Time) string {
 // TimeZone (nil = none): TIMESTAMPTZ values arrive from the driver as bare
 // UTC instants with no type marker, so the comparator additionally accepts
 // the rendering in the session zone with DuckDB's offset suffix.
-func compareValue(actual any, actualStr, expected string, tz *time.Location) bool {
+func compareValue(actual any, actualStr, expected string, rc renderCtx) bool {
 	if actualStr == expected {
 		return true
 	}
@@ -2164,7 +2313,7 @@ func compareValue(actual any, actualStr, expected string, tz *time.Location) boo
 			ts + "+00",
 			timeOfDayString(x),
 		}
-		if tz != nil {
+		if tz := rc.tz; tz != nil {
 			// TIMESTAMPTZ rendering in the session TimeZone (driver gives the
 			// UTC instant; DuckDB renders in the session zone with offset)
 			lx := x.In(tz)

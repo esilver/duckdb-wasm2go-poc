@@ -26,6 +26,9 @@ wasm2go -embed -unsafe -pkg duckdbcore -o "$HERE/converge/genpkg/gen.go" "$WASM"
 echo "### 4. split New()"
 python3 "$HERE/split_new.py" "$HERE/converge/genpkg/gen.go"
 
+echo "### 4b. inline hot wasm helpers (textual; ~1.7-2x runtime, see scripts/inline_helpers.py)"
+python3 "$HERE/scripts/inline_helpers.py" "$HERE/converge/genpkg/gen.go"
+
 echo "### 5. go build (compile check)"
 cd "$HERE/converge"
 time go build -gcflags='duckdbconverge/genpkg=-N -l -c=16' ./...

@@ -34,19 +34,30 @@ if [[ "${GENOPT:-0}" == 1 ]]; then
   # feasible (~131s / 2.75GB peak vs >50GB OOM on the monolith); the engine is
   # selected with -tags genopt (see converge/duckdb/module_engine_genopt.go).
   # MUST run BEFORE step 4b: the textual inliner pre-expands the IR at source
-  # level, which defeats the shards' '-l' and OOMs the optimizer (>28GB seen).
+  # level, which OOMs the optimizer on the unsplit shards (>28GB seen).
   python3 "$HERE/scripts/transform_genopt.py"
+
+  echo "### 4d. split giant functions (scripts/split_giant_fns.py) — enables genopt WITHOUT '-l'"
+  # Functions over ~8k lines explode the inliner's IR (>50GB OOM) and Fn6568
+  # exceeds the compiler's 65536-SSA-block hard cap outright (bricks GOOS=js).
+  # Splitting them into semantically identical part-functions lets every
+  # genopt package compile fully optimized with NO '-l' (2.3-2.9x runtime).
+  genopt_files=("$HERE"/converge/genopt/core/core.go "$HERE"/converge/genopt/shard*/shard.go)
+  python3 "$HERE/scripts/split_giant_fns.py" --threshold 8000 ${genopt_files:#*/shard20/*}
+  # shard20 special case: Fn1308 is the known IR bomb — at the 8k split it
+  # still needs >12.7GB; at 4k it compiles in 1.19GB. Finer-grained split.
+  python3 "$HERE/scripts/split_giant_fns.py" --threshold 4000 --max-part 4000 \
+    "$HERE/converge/genopt/shard20/shard.go"
 fi
 
 echo "### 4b. inline hot wasm helpers (textual; ~1.7-2x runtime, see scripts/inline_helpers.py)"
 python3 "$HERE/scripts/inline_helpers.py" "$HERE/converge/genpkg/gen.go"
 
 if [[ "${GENOPT:-0}" == 1 ]]; then
-  echo "### 4c2. genopt compile check (serial; core -c=1, shards -l -c=1 — '-l' mandatory)"
+  echo "### 4c2. genopt compile check (serial; core+shards -c=1; NO '-l' — step 4d made it unnecessary)"
   cd "$HERE/converge"
   time go build -tags genopt -p 1 \
-    -gcflags='duckdbconverge/genopt/...=-l -c=1' \
-    -gcflags='duckdbconverge/genopt/core=-c=1' ./duckdb/...
+    -gcflags='duckdbconverge/genopt/...=-c=1' ./duckdb/...
   cd "$HERE"
 fi
 

@@ -34,10 +34,11 @@ import (
 
 // host_open flag bits (must match HOSTO_* in host_fs.cpp).
 const (
-	hostoRead   = 1 << 0
-	hostoWrite  = 1 << 1
-	hostoCreate = 1 << 2
-	hostoTrunc  = 1 << 3
+	hostoRead    = 1 << 0
+	hostoWrite   = 1 << 1
+	hostoCreate  = 1 << 2
+	hostoTrunc   = 1 << 3
+	hostoPrivate = 1 << 4 // create 0600 (FILE_FLAGS_PRIVATE: persistent secrets)
 )
 
 // errnoOf maps a Go filesystem error to a POSIX errno (positive). Callers negate
@@ -117,7 +118,11 @@ func (s *Shim) Xhost_open(pathPtr, pathLen, flags int32) int64 {
 	if flags&hostoTrunc != 0 {
 		oflag |= os.O_TRUNC
 	}
-	f, err := os.OpenFile(path, oflag, 0o644)
+	perm := os.FileMode(0o644)
+	if flags&hostoPrivate != 0 {
+		perm = 0o600 // LocalFileSystem::IsPrivateFile (lstat) checks group/other bits
+	}
+	f, err := os.OpenFile(path, oflag, perm)
 	if err != nil {
 		return int64(-errnoOf(err))
 	}

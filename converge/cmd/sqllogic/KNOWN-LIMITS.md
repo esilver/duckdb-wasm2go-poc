@@ -56,6 +56,19 @@ failures) and all engine-side:
   (`SET Calendar='indian'/'islamic-umalqura'`) would require reimplementing
   those ICU calendars in the runner; the japanese (hybrid) rows now match.
 
+
+**2026-06-10 wasm rebuild (host-FS + WAL APPEND).** Full pipeline re-run (first
+from-scratch since splitter steps 4c/4d) with host_fs.cpp + wasishim fixes:
+`~` expansion via ExpandPath+CanonicalizePath, `file://` URLs, HostFileSystem
+installed as VFS default (persistent secrets), GetName()="LocalFileSystem"
+(disabled_filesystems enforcement), HOME-only WASI environ
+(allowed_directories_install), lstat64/stat64/mkdirat in wasishim, and the
+checkpoint-lane FILE_FLAGS_APPEND fix (WAL head no longer overwritten).
+New baseline (`/tmp/sqllogic_wasmrebuild.txt`): **2,513 PASS / 20 FAIL / 789
+SKIP — 99.2% excluding skips**; 8 files fixed (all of class L host-FS +
+wal_promote_version), zero new failures. The logging pair (class M) did NOT
+flip — APPEND was necessary but not sufficient there; still open.
+
 **2026-06-10 `set seed` fix.** The "IEJoin nondeterministic wrong results"
 (bucket R's headline correctness bug) and all of bucket Q were OUR RUNNER, not
 the engine: the parser lumped `set` into the ignored directives, so

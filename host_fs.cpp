@@ -79,8 +79,9 @@ int32_t host_listdir(const char *path, int32_t pathlen, char *out, int32_t outca
 enum {
 	HOSTO_READ  = 1 << 0,
 	HOSTO_WRITE = 1 << 1,
-	HOSTO_CREATE = 1 << 2, // create if missing
-	HOSTO_TRUNC = 1 << 3,  // truncate to zero on open
+	HOSTO_CREATE = 1 << 2,  // create if missing
+	HOSTO_TRUNC = 1 << 3,   // truncate to zero on open
+	HOSTO_PRIVATE = 1 << 4, // create with 0600 (FILE_FLAGS_PRIVATE, persistent secrets)
 };
 
 namespace duckdb {
@@ -110,8 +111,12 @@ class HostFileSystem : public FileSystem {
 public:
 	// Opens through the host. We resolve the minimal flag translation needed for
 	// (a) a duckdb database file (read+write, create) and (b) a CSV (read-only).
-	unique_ptr<FileHandle> OpenFile(const string &path, FileOpenFlags flags,
+	// Like LocalFileSystem, every path-taking entry point first runs
+	// FileSystem::ExpandPath(path, opener): '~' -> the home_directory setting
+	// (via the opener) or $HOME, and file:/ URLs are stripped to plain paths.
+	unique_ptr<FileHandle> OpenFile(const string &path_p, FileOpenFlags flags,
 	                                optional_ptr<FileOpener> opener) override {
+		auto path = ExpandPath(path_p, opener);
 		int32_t hflags = 0;
 		if (flags.OpenForReading()) {
 			hflags |= HOSTO_READ;
@@ -125,6 +130,9 @@ public:
 		if (flags.OverwriteExistingFile()) {
 			hflags |= HOSTO_TRUNC;
 		}
+		if (flags.CreatePrivateFile()) {
+			hflags |= HOSTO_PRIVATE;
+		}
 		if (hflags == 0) {
 			hflags = HOSTO_READ;
 		}
@@ -135,7 +143,21 @@ public:
 			}
 			throw IOException("HostFileSystem: failed to open \"%s\" (errno %d)", path, (int)-fd);
 		}
-		return make_uniq<HostFileHandle>(*this, path, flags, (int32_t)fd);
+		auto handle = make_uniq<HostFileHandle>(*this, path, flags, (int32_t)fd);
+		if (flags.OpenForAppending()) {
+			// Native opens with O_APPEND: every position-form Write lands at EOF.
+			// The WAL relies on this (WriteAheadLog::Initialize opens APPEND and
+			// BufferedFileWriter writes position-form); starting at 0 would
+			// OVERWRITE the WAL head on re-attach (wal_promote_version corpus
+			// proof, checkpoint lane 2026-06-10). Emulate by starting the handle
+			// position at the current file size (single-writer;
+			// BufferedFileWriter::Truncate re-Seeks on truncate).
+			int64_t sz = host_size((int32_t)fd);
+			if (sz > 0) {
+				handle->position = (idx_t)sz;
+			}
+		}
+		return handle;
 	}
 
 	// ----- absolute-offset Read/Write (the StorageManager hot path) -----------
@@ -241,25 +263,31 @@ public:
 	}
 
 	// ----- existence ----------------------------------------------------------
-	bool FileExists(const string &filename, optional_ptr<FileOpener> opener) override {
+	bool FileExists(const string &filename_p, optional_ptr<FileOpener> opener) override {
+		auto filename = ExpandPath(filename_p, opener);
 		return host_exists(filename.c_str(), (int32_t)filename.size()) == 1;
 	}
-	bool DirectoryExists(const string &directory, optional_ptr<FileOpener> opener) override {
+	bool DirectoryExists(const string &directory_p, optional_ptr<FileOpener> opener) override {
+		auto directory = ExpandPath(directory_p, opener);
 		return host_isdir(directory.c_str(), (int32_t)directory.size()) == 1;
 	}
 
 	// ----- path-based file lifecycle (WAL create/rename/delete on checkpoint) --
-	void RemoveFile(const string &filename, optional_ptr<FileOpener> opener) override {
+	void RemoveFile(const string &filename_p, optional_ptr<FileOpener> opener) override {
+		auto filename = ExpandPath(filename_p, opener);
 		int32_t rc = host_unlink(filename.c_str(), (int32_t)filename.size());
 		if (rc < 0) {
 			throw IOException("HostFileSystem: remove failed on \"%s\" (errno %d)", filename, (int)-rc);
 		}
 	}
-	bool TryRemoveFile(const string &filename, optional_ptr<FileOpener> opener) override {
+	bool TryRemoveFile(const string &filename_p, optional_ptr<FileOpener> opener) override {
+		auto filename = ExpandPath(filename_p, opener);
 		int32_t rc = host_unlink(filename.c_str(), (int32_t)filename.size());
 		return rc == 0;
 	}
-	void MoveFile(const string &source, const string &target, optional_ptr<FileOpener> opener) override {
+	void MoveFile(const string &source_p, const string &target_p, optional_ptr<FileOpener> opener) override {
+		auto source = ExpandPath(source_p, opener);
+		auto target = ExpandPath(target_p, opener);
 		int32_t rc = host_rename(source.c_str(), (int32_t)source.size(), target.c_str(),
 		                         (int32_t)target.size());
 		if (rc < 0) {
@@ -269,20 +297,23 @@ public:
 	}
 
 	// ----- directories (DuckDB's temp-spill dir, EXPORT DATABASE, ...) ---------
-	void CreateDirectory(const string &directory, optional_ptr<FileOpener> opener) override {
+	void CreateDirectory(const string &directory_p, optional_ptr<FileOpener> opener) override {
+		auto directory = ExpandPath(directory_p, opener);
 		int32_t rc = host_mkdir(directory.c_str(), (int32_t)directory.size());
 		if (rc < 0) {
 			throw IOException("HostFileSystem: mkdir \"%s\" failed (errno %d)", directory, (int)-rc);
 		}
 	}
-	void RemoveDirectory(const string &directory, optional_ptr<FileOpener> opener) override {
+	void RemoveDirectory(const string &directory_p, optional_ptr<FileOpener> opener) override {
+		auto directory = ExpandPath(directory_p, opener);
 		int32_t rc = host_rmdir(directory.c_str(), (int32_t)directory.size());
 		if (rc < 0) {
 			throw IOException("HostFileSystem: rmdir \"%s\" failed (errno %d)", directory, (int)-rc);
 		}
 	}
-	bool ListFiles(const string &directory, const std::function<void(const string &, bool)> &callback,
+	bool ListFiles(const string &directory_p, const std::function<void(const string &, bool)> &callback,
 	               FileOpener *opener) override {
+		auto directory = ExpandPath(directory_p, opener);
 		std::vector<char> buf(1 << 20);
 		int32_t n = host_listdir(directory.c_str(), (int32_t)directory.size(), buf.data(), (int32_t)buf.size());
 		if (n < 0) {
@@ -316,7 +347,12 @@ public:
 	// cwd on the Go side, like every other host_* call. Expansion order uses the
 	// same smallest-path-first priority queue as LocalGlobResult; within one
 	// directory, os.ReadDir (Go side) yields names sorted.
-	vector<OpenFileInfo> Glob(const string &path, FileOpener *opener) override {
+	vector<OpenFileInfo> Glob(const string &path_p, FileOpener *opener) override {
+		// like LocalGlobResult: the pattern is ExpandPath'd before splitting, so
+		// '~/x*.csv' resolves against the home_directory setting and file:/ URLs
+		// glob like plain paths. Results are therefore expanded paths (native
+		// behavior: downstream opens use the glob results verbatim).
+		auto path = ExpandPath(path_p, opener);
 		vector<OpenFileInfo> result;
 		if (path.empty()) {
 			return result;
@@ -454,9 +490,30 @@ public:
 		return result;
 	}
 
-	// ----- dispatch hooks: take precedence over the default LocalFileSystem ----
-	// CanHandleFile returns true for plain absolute/relative paths and file: URIs
-	// (anything that is NOT another registered protocol like http:// or s3://).
+	// ----- canonicalization (ATTACH path dedup) --------------------------------
+	// DatabaseManager::AttachDatabase canonicalizes every attach path and uses the
+	// result to detect "database is already attached" (database_manager.cpp:117).
+	// Native LocalFileSystem::CanonicalizePath = ExpandPath + make-absolute +
+	// realpath. We mirror it minus realpath (no symlink resolution host call):
+	// expansion + cwd-absolutization + the engine's textual ./.. removal is
+	// consistent across all spellings of the same path, which is what the dedup
+	// needs ('~/x.db' vs '<testdir>/x.db' vs 'file://<testdir>/x.db').
+	string CanonicalizePath(const string &path_p, optional_ptr<FileOpener> opener) override {
+		auto path = ExpandPath(path_p, opener);
+		if (path.empty()) {
+			return path;
+		}
+		if (!FileSystem::IsPathAbsolute(path)) {
+			path = JoinPath(FileSystem::GetWorkingDirectory(), path);
+		}
+		return FileSystem::CanonicalizePath(path);
+	}
+
+	// ----- dispatch hooks -------------------------------------------------------
+	// HostFileSystem is installed as the VFS *default* filesystem (see
+	// host_fs_attach_to_config below), exactly where native DuckDB puts its
+	// LocalFileSystem; CanHandleFile/IsManuallySet are kept for the legacy
+	// register_host_fs() subsystem path only.
 	bool CanHandleFile(const string &fpath) override {
 		if (fpath.rfind("file:", 0) == 0) {
 			return true;
@@ -468,14 +525,18 @@ public:
 		}
 		return true;
 	}
-	// IsManuallySet() == true makes FindFileSystemInternal return us IMMEDIATELY
-	// instead of merely as a candidate, so we win over the default fs.
 	bool IsManuallySet() override {
 		return true;
 	}
 
+	// The engine identifies the local filesystem BY NAME: SET disabled_filesystems
+	// ='LocalFileSystem' disables whatever GetName()=="LocalFileSystem"
+	// (virtual_file_system.cpp FindFileSystem + LocalDatabaseFileSystem::
+	// GetFileSystem), and error messages quote it. We ARE the local filesystem of
+	// this build, so we take the native name; the IOException prefixes below keep
+	// "HostFileSystem:" for origin debugging.
 	std::string GetName() const override {
-		return "HostFileSystem";
+		return "LocalFileSystem";
 	}
 };
 
@@ -497,11 +558,14 @@ public:
 // host_fs_attach_to_config(duckdb_config) — duckdb_config is a DBConfig* (capi).
 extern "C" void host_fs_attach_to_config(duckdb_config config) {
 	auto *cfg = reinterpret_cast<duckdb::DBConfig *>(config);
-	// A VirtualFileSystem wrapping a default local fs (so non-file protocols and
-	// the registry plumbing still work), with our HostFileSystem registered as a
-	// subsystem that wins for plain paths (CanHandleFile + IsManuallySet).
-	auto vfs = duckdb::make_uniq<duckdb::VirtualFileSystem>(duckdb::FileSystem::CreateLocal());
-	vfs->RegisterSubSystem(duckdb::make_uniq<duckdb::HostFileSystem>());
+	// A VirtualFileSystem whose DEFAULT filesystem is the HostFileSystem — the
+	// exact slot native DuckDB gives its LocalFileSystem. Putting it in the
+	// default slot (instead of registering a subsystem) matters beyond dispatch:
+	// ResolveLocalFileSystem (database.cpp) hands FileSystem::GetLocal(db) the VFS
+	// default when IsLocalFileSystem() — that is the path persistent secrets and
+	// extension metadata take, which previously fell through to the
+	// emscripten-stubbed LocalFileSystem (mkdir -> "Function not implemented").
+	auto vfs = duckdb::make_uniq<duckdb::VirtualFileSystem>(duckdb::make_uniq<duckdb::HostFileSystem>());
 	cfg->file_system = std::move(vfs);
 }
 

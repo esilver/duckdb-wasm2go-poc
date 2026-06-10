@@ -30,10 +30,13 @@ package wasishim
 import (
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -195,16 +198,45 @@ func (s *Shim) Xclock_res_get(clockID, resPtr int32) int32 {
 	return wasiESUCCESS
 }
 
-// environ_sizes_get(countPtr, bufSizePtr): empty environment.
+// hostEnviron is the environment exposed to the wasm. Deliberately MINIMAL:
+// only HOME, which DuckDB's FileSystem::GetHomeDirectory falls back to when the
+// home_directory setting is unset. Without it '~' expansion yields "" and
+// ExtensionHelper::ExtensionDirectory trips over rfind(home,0)==0 being
+// vacuously true for every path ('Cannot access directory ""'). We do NOT pass
+// the full host environ so stray DUCKDB_*/TZ vars cannot perturb the engine.
+func hostEnviron() []string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return []string{"HOME=" + home}
+	}
+	return nil
+}
+
+// environ_sizes_get(countPtr, bufSizePtr): the minimal HOME-only environment.
 func (s *Shim) Xenviron_sizes_get(countPtr, bufSizePtr int32) int32 {
+	env := hostEnviron()
+	size := 0
+	for _, kv := range env {
+		size += len(kv) + 1
+	}
 	mem := s.memb()
-	binary.LittleEndian.PutUint32(mem[countPtr:], 0)
-	binary.LittleEndian.PutUint32(mem[bufSizePtr:], 0)
+	binary.LittleEndian.PutUint32(mem[countPtr:], uint32(len(env)))
+	binary.LittleEndian.PutUint32(mem[bufSizePtr:], uint32(size))
 	return wasiESUCCESS
 }
 
-// environ_get(environPtr, bufPtr): nothing to write for an empty environment.
-func (s *Shim) Xenviron_get(environPtr, bufPtr int32) int32 { return wasiESUCCESS }
+// environ_get(environPtr, bufPtr): write the env strings NUL-terminated at
+// bufPtr and the per-entry pointers at environPtr (WASI preview1 contract).
+func (s *Shim) Xenviron_get(environPtr, bufPtr int32) int32 {
+	mem := s.memb()
+	off := bufPtr
+	for i, kv := range hostEnviron() {
+		binary.LittleEndian.PutUint32(mem[environPtr+int32(4*i):], uint32(off))
+		copy(mem[off:], kv)
+		mem[off+int32(len(kv))] = 0
+		off += int32(len(kv)) + 1
+	}
+	return wasiESUCCESS
+}
 
 // args_sizes_get / args_get: empty argv.
 func (s *Shim) Xargs_sizes_get(countPtr, bufSizePtr int32) int32 {
@@ -242,15 +274,121 @@ func (s *Shim) X__syscall_ioctl(fd, op, varargs int32) int32 {
 	s.logf("STUB __syscall_ioctl -> -ENOSYS")
 	return -wasiENOSYS
 }
+
+// ---- implemented stat family (emscripten ABI) -------------------------------
+// A handful of engine paths bypass the DuckDB FileSystem seam and issue raw
+// libc calls; the load-bearing one is LocalFileSystem::IsPrivateFile (lstat on
+// persistent-secret files, secret_manager read-back). Implemented against the
+// host OS like host_* / getcwd.
+//
+// Emscripten errno numbering (musl-on-wasm uses the WASI codes; matches the
+// -EINVAL/-ERANGE constants getcwd below already uses).
+const (
+	emEACCES  = 2
+	emEEXIST  = 20
+	emEINVAL  = 28
+	emEIO     = 29
+	emENOENT  = 44
+	emENOTDIR = 54
+)
+
+// emErrnoOf maps a Go fs error onto emscripten's errno numbering (positive;
+// callers negate).
+func emErrnoOf(err error) int32 {
+	var errno syscall.Errno
+	if errors.As(err, &errno) && errno == syscall.ENOTDIR {
+		return emENOTDIR
+	}
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return emENOENT
+	case errors.Is(err, fs.ErrExist):
+		return emEEXIST
+	case errors.Is(err, fs.ErrPermission):
+		return emEACCES
+	case errors.Is(err, fs.ErrInvalid):
+		return emEINVAL
+	default:
+		return emEIO
+	}
+}
+
+// cString reads a NUL-terminated string from module memory (libc pathnames).
+func (s *Shim) cString(ptr int32) string {
+	mem := s.memb()
+	if ptr <= 0 || int(ptr) >= len(mem) {
+		return ""
+	}
+	end := int(ptr)
+	for end < len(mem) && mem[end] != 0 {
+		end++
+	}
+	return string(mem[ptr:end])
+}
+
+// writeEmStat fills an emscripten `struct stat` (96 bytes; layout per
+// musl/arch/emscripten/bits/stat.h: dev u32@0, mode u32@4, nlink u32@8,
+// uid u32@12, gid u32@16, rdev u32@20, size i64@24, blksize i32@32,
+// blocks i32@36, atim {sec i64, nsec i32}@40, mtim@56, ctim@72, ino u64@88).
+func (s *Shim) writeEmStat(buf int32, fi os.FileInfo) {
+	mem := s.memb()
+	b := mem[buf : buf+96]
+	for i := range b {
+		b[i] = 0
+	}
+	le := binary.LittleEndian
+	mode := uint32(fi.Mode().Perm())
+	switch {
+	case fi.Mode().IsDir():
+		mode |= 0o040000 // S_IFDIR
+	case fi.Mode()&fs.ModeSymlink != 0:
+		mode |= 0o120000 // S_IFLNK
+	default:
+		mode |= 0o100000 // S_IFREG
+	}
+	var dev, ino uint64 = 1, 1
+	var nlink, uid, gid uint32 = 1, 0, 0
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		dev, ino = uint64(st.Dev), uint64(st.Ino)
+		nlink, uid, gid = uint32(st.Nlink), st.Uid, st.Gid
+		mode = uint32(st.Mode) // exact bits incl. setuid/sticky
+	}
+	le.PutUint32(b[0:], uint32(dev))
+	le.PutUint32(b[4:], mode)
+	le.PutUint32(b[8:], nlink)
+	le.PutUint32(b[12:], uid)
+	le.PutUint32(b[16:], gid)
+	le.PutUint64(b[24:], uint64(fi.Size()))
+	le.PutUint32(b[32:], 4096)                        // st_blksize
+	le.PutUint32(b[36:], uint32((fi.Size()+511)/512)) // st_blocks
+	sec, nsec := uint64(fi.ModTime().Unix()), uint32(fi.ModTime().Nanosecond())
+	le.PutUint64(b[40:], sec) // st_atim (mtime stands in)
+	le.PutUint32(b[48:], nsec)
+	le.PutUint64(b[56:], sec) // st_mtim
+	le.PutUint32(b[64:], nsec)
+	le.PutUint64(b[72:], sec) // st_ctim
+	le.PutUint32(b[80:], nsec)
+	le.PutUint64(b[88:], ino)
+}
+
 func (s *Shim) X__syscall_stat64(pathPtr, bufPtr int32) int32 {
-	s.logf("STUB __syscall_stat64 -> -ENOSYS")
-	return -wasiENOSYS
+	fi, err := os.Stat(s.cString(pathPtr))
+	if err != nil {
+		return -emErrnoOf(err)
+	}
+	s.writeEmStat(bufPtr, fi)
+	return 0
 }
 func (s *Shim) X__syscall_lstat64(pathPtr, bufPtr int32) int32 {
-	s.logf("STUB __syscall_lstat64 -> -ENOSYS")
-	return -wasiENOSYS
+	fi, err := os.Lstat(s.cString(pathPtr))
+	if err != nil {
+		return -emErrnoOf(err)
+	}
+	s.writeEmStat(bufPtr, fi)
+	return 0
 }
 func (s *Shim) X__syscall_fstat64(fd, bufPtr int32) int32 {
+	// musl-level fds only exist for stdio here (no openat); nothing to stat.
 	s.logf("STUB __syscall_fstat64 -> -ENOSYS")
 	return -wasiENOSYS
 }
@@ -290,9 +428,23 @@ func (s *Shim) X__syscall_rmdir(pathPtr int32) int32 {
 	s.logf("STUB __syscall_rmdir -> -ENOSYS")
 	return -wasiENOSYS
 }
+
+// __syscall_mkdirat: emscripten passes AT_FDCWD (-100) for plain mkdir();
+// relative paths resolve against the host cwd, matching getcwd above.
 func (s *Shim) X__syscall_mkdirat(dirFd, pathPtr, mode int32) int32 {
-	s.logf("STUB __syscall_mkdirat -> -ENOSYS")
-	return -wasiENOSYS
+	const atFdCwd = -100
+	path := s.cString(pathPtr)
+	if path == "" {
+		return -emENOENT
+	}
+	if dirFd != atFdCwd && !os.IsPathSeparator(path[0]) {
+		s.logf("__syscall_mkdirat dirfd=%d unsupported -> -ENOSYS", dirFd)
+		return -wasiENOSYS
+	}
+	if err := os.Mkdir(path, fs.FileMode(uint32(mode)&0o777)); err != nil {
+		return -emErrnoOf(err)
+	}
+	return 0
 }
 
 // ---- abort / assert -------------------------------------------------------

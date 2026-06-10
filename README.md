@@ -58,10 +58,25 @@ This route delivers pure-Go DuckDB **semantics, not speed**: roughly
 narrower on join/hash/string-heavy work). Two structural causes: wasm2go has
 no SIMD support (the wasm is built `-mno-simd128`), and the transpiled engine
 package can only be compiled with Go optimization disabled (`-N -l`) — full
-optimization OOMs the Go compiler on a package this size. A multi-package
-transform that splits the engine so it compiles fully optimized is prototyped
-and in validation. Benchmarks and the tuning levers already exhausted are in
+optimization OOMs the Go compiler on a package this size. Benchmarks and the
+tuning levers already exhausted are in
 [RESULTS-runnable-poc.md](RESULTS-runnable-poc.md).
+
+**Optimized engine (`-tags genopt`):** the second cause is now solved by a
+multi-package transform ([scripts/transform_genopt.py](scripts/transform_genopt.py),
+run via `GENOPT=1 ./rebuild_fs_all.sh` step 4c): the 42.5k generated `fnNNN`
+methods become free functions across `converge/genopt/{core,shardNN}`
+(cross-shard calls through `TBL_FnN` func-vars), so the Go optimizer runs
+per-package — ~131s / 2.75GB peak instead of a >50GB OOM — and queries run
+**2.0–2.6× faster** than the `-N -l` build of the same source. Select the
+engine with `-tags genopt` plus the per-package flags in
+[`converge/duckdb/module_engine_genopt.go`](converge/duckdb/module_engine_genopt.go)
+(`-l` on the shards is mandatory). Note the transform runs on the
+**pre-inline** transpile: the step-4b textual inliner pre-expands the IR at
+source level, which defeats `-l` and OOMs the optimizer the same way (>28GB
+observed) — the two optimizations do not compose. The monolithic `genpkg`
+(default tag, textually inlined, `-N -l`) remains the reference engine. The
+optimized layout ships as `duckdb-go-pure` v0.2.0.
 
 ## How it works
 

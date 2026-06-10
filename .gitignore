@@ -26,6 +26,7 @@ parsecheck/parsecheck
 duckdb_core.wasm.trackB
 # wasm2go output (transpiled Go) + its embedded data
 converge/genpkg/
+converge/genopt/
 converge_c/genpkg/
 *_gen.go
 *.dat

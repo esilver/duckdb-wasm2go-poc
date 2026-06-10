@@ -62,21 +62,29 @@ optimization OOMs the Go compiler on a package this size. Benchmarks and the
 tuning levers already exhausted are in
 [RESULTS-runnable-poc.md](RESULTS-runnable-poc.md).
 
-**Optimized engine (`-tags genopt`):** the second cause is now solved by a
-multi-package transform ([scripts/transform_genopt.py](scripts/transform_genopt.py),
-run via `GENOPT=1 ./rebuild_fs_all.sh` step 4c): the 42.5k generated `fnNNN`
-methods become free functions across `converge/genopt/{core,shardNN}`
-(cross-shard calls through `TBL_FnN` func-vars), so the Go optimizer runs
-per-package — ~131s / 2.75GB peak instead of a >50GB OOM — and queries run
-**2.0–2.6× faster** than the `-N -l` build of the same source. Select the
-engine with `-tags genopt` plus the per-package flags in
+**Optimized engine (`-tags genopt`):** the second cause is now solved by two
+transforms run via `GENOPT=1 ./rebuild_fs_all.sh`: a multi-package shard
+([scripts/transform_genopt.py](scripts/transform_genopt.py), step 4c) — the
+42.5k generated `fnNNN` methods become free functions across
+`converge/genopt/{core,shardNN}` (cross-shard calls through `TBL_FnN`
+func-vars), so the Go optimizer runs per-package — followed by a function
+splitter ([scripts/split_giant_fns.py](scripts/split_giant_fns.py), step 4d)
+that splits every >8k-line transpiled function (4k in shard20) into
+semantically identical part-functions, which keeps the inliner's IR bounded.
+With both, every genopt package compiles **fully optimized, no `-l`**
+(0.4–3.4GB peak per package vs >50GB OOM before) and queries run
+**2.3–2.9× faster** than the `-N -l` build of the same source (1.9× on the
+sqllogictest corpus wall clock). Select the engine with `-tags genopt` plus
+the per-package flags in
 [`converge/duckdb/module_engine_genopt.go`](converge/duckdb/module_engine_genopt.go)
-(`-l` on the shards is mandatory). Note the transform runs on the
-**pre-inline** transpile: the step-4b textual inliner pre-expands the IR at
-source level, which defeats `-l` and OOMs the optimizer the same way (>28GB
-observed) — the two optimizations do not compose. The monolithic `genpkg`
+(now just `-gcflags='duckdbconverge/genopt/...=-c=1'`). Note the transform
+runs on the **pre-inline** transpile: the step-4b textual inliner pre-expands
+the IR at source level, which OOMs the optimizer the same way (>28GB
+observed) — the two optimizations do not compose. The splitter is also what
+makes `GOOS=js` builds possible at all: the largest function (36.5k lines)
+exceeded the Go compiler's 65536-SSA-block hard cap. The monolithic `genpkg`
 (default tag, textually inlined, `-N -l`) remains the reference engine. The
-optimized layout ships as `duckdb-go-pure` v0.2.0.
+optimized layout ships as `duckdb-go-pure` v0.3.0.
 
 ## How it works
 
@@ -139,6 +147,8 @@ RAM):
 ```sh
 ./rebuild_fs_all.sh   # build_fs.sh (emcc) -> regen exhost invokes ->
                       # wasm2go -> split_new.py -> go build
+                      # GENOPT=1: also transform_genopt.py (shard) ->
+                      # split_giant_fns.py (no '-l' needed) -> compile check
 ```
 
 Key invariants the scripts encode:

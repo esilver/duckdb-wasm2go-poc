@@ -58,7 +58,7 @@ if [[ "${GENOPT:-0}" == 1 ]]; then
   # Splitting them into semantically identical part-functions lets every
   # genopt package compile fully optimized with NO '-l' (2.3-2.9x runtime).
   genopt_files=("$HERE"/converge/genopt/core/core.go "$HERE"/converge/genopt/shard*/shard.go)
-  python3 "$HERE/scripts/split_giant_fns.py" --threshold 8000 ${genopt_files:#*/shard20/*}
+  python3 "$HERE/scripts/split_giant_fns.py" --threshold 4000 ${genopt_files:#*/shard20/*}
   # shard20 special case: Fn1308 is the known IR bomb — at the 8k split it
   # still needs >12.7GB; at 4k it compiles in 1.19GB. Finer-grained split.
   python3 "$HERE/scripts/split_giant_fns.py" --threshold 4000 --max-part 4000 \

@@ -15,6 +15,101 @@ Baseline report: `/tmp/sqllogic_salvage.txt` (2026-06-09):
 | SKIP (unsupported directives: `load`, `require parquet/tpch/httpfs/...`) | 789 | 23.8 % |
 | **Pass rate excluding skips** | | **91.2 %** |
 
+**2026-06-10 tail-sweep update.** The nested-fidelity lane took the corpus to
+2,443 PASS / 90 FAIL; this lane re-classified all 90 and fixed the
+runner/driver-side classes. New baseline (`/tmp/sqllogic_tail_final.txt`):
+**2,489 PASS / 44 FAIL / 789 SKIP — 98.3 % pass rate excluding skips**; the
+44 still-failing files are a strict subset of the previous 90 (zero new
+failures) and all engine-side:
+
+- **P (runner limitations) — FIXED.** Expected rows now split like upstream's
+  `StringUtil::Split(line, "\t")` (empty fields dropped, applied only as a
+  fallback when the strict split disagrees with the column count), and
+  multi-variable `foreach type,min,max tok,tok,tok` iterates correctly. All 16
+  P files plus `read_json_dates` (the third multi-var foreach user) pass.
+- **D (BIGNUM decode) — FIXED** in the driver (`exotic.go bignumString`):
+  varint blob → exact decimal string. All bignum files pass.
+- **E (VARIANT decode) — FIXED** in the driver (`variant.go`): full binary
+  decode of the physical 4-child struct; cells deliver the exact
+  `Value::CastAs(VARCHAR)` string (ARRAY items raw, OBJECT values
+  quoted-if-needed). The runner renders VARIANT children raw at nested
+  positions (`faceVariant`). All variant files pass.
+- **F (GEOMETRY decode) — FIXED** in the driver (`exotic.go geometryString`):
+  WKB → WKT port of `Geometry::ToStringRecursive` (Z/M flags, EMPTY parts,
+  fmt-style coordinates). All geo files pass.
+- **G (UUID-as-INT128) — FIXED** in the driver: UUID cells render canonically
+  (`BaseUUID::ToString` MSB flip) on every path (flat, nested, UDF args).
+- **L (host-FS gaps) — PARTIAL.** `__syscall_getcwd` is now implemented in
+  wasishim (fixes "Could not get working directory!");
+  `allowed_directories_install` progresses to an extension-directory
+  resolution gap (`Cannot access directory ""`). The remaining L items live in
+  the C++ `host_fs.cpp` compiled into the wasm (a rebuild, not driver work):
+  `~` expansion ignores the `home_directory` setting (opener not plumbed),
+  `file://` URLs unsupported (attach_fsspec), persistent secrets hit the
+  stubbed emscripten `__syscall_mkdirat`/`stat64` family,
+  `disabled_filesystems`/local-FS-metadata are not enforced against
+  HostFileSystem.
+- **C (temporal) — `test_icu_timezone` FIXED** (runner now accepts
+  `UTC±HH[:MM]` fixed-offset TimeZone spellings and renders pre-1582
+  TIMESTAMPTZ dates with ICU's hybrid Julian/Gregorian calendar).
+  `test_icu_calendar` remains: rendering under non-Gregorian SESSION CALENDARS
+  (`SET Calendar='indian'/'islamic-umalqura'`) would require reimplementing
+  those ICU calendars in the runner; the japanese (hybrid) rows now match.
+
+Everything else still failing is engine-side and keeps its classification
+below (I, J, K remnants, N, O, Q, R singles, A remnants:
+`read_csv_glob` relative `glob('*/*.csv')` count and `csv_rejects_read`
+rejects-table row count, plus M remnants logging_csv/logging_types).
+
+**The 44 remaining files** (first-failure symptom):
+
+- `test/sql/aggregate/aggregates/test_null_aggregates.test` — [unexpected error: Invalid Error: Unoptimized statement differs from original result!] line 314
+- `test/sql/aggregate/aggregates/test_quantile_disc.test` — [wrong result] line 97
+- `test/sql/attach/attach_fsspec.test` — [unexpected error: IO Error: HostFileSystem: failed to open ? (errno #)] line 13
+- `test/sql/attach/attach_home_directory.test` — [statement error: message mismatch] line 20
+- `test/sql/catalog/test_extension_suggestion.test` — [statement error: message mismatch] line 9
+- `test/sql/catalog/view/test_loosely_qualified_view_sql.test` — [hash mismatch] line 43
+- `test/sql/copy/csv/csv_home_directory.test` — [unexpected error: IO Error: No files found that match the pattern ?] line 17
+- `test/sql/copy/csv/glob/read_csv_glob.test` — [wrong result] line 211
+- `test/sql/copy/csv/rejects/csv_rejects_read.test` — [wrong row count] line 238
+- `test/sql/copy/csv/test_timestamptz_12926.test` — [statement error: expected error, got success] line 8
+- `test/sql/error/error_position.test` — [statement error: message mismatch] line 9
+- `test/sql/extensions/allowed_directories_install.test` — [statement error: message mismatch] line 15
+- `test/sql/function/generic/test_sleep.test` — [unexpected error: Invalid Input Error: ThreadUtil::SleepMs requires DuckDB to be compiled with thre] line 6
+- `test/sql/function/numeric/set_seed_for_sample.test` — [hash mismatch] line 16
+- `test/sql/function/operator/test_in_empty_table.test` — [unexpected error: Conversion Error: Could not convert string ? to INT#] line 8
+- `test/sql/join/iejoin/iejoin_projection_maps.test` — [wrong result] line 23
+- `test/sql/join/iejoin/test_iejoin_events.test` — [wrong result] line 48
+- `test/sql/json/issues/read_json_memory_usage.test` — [statement error: expected error, got success] line 25
+- `test/sql/json/test_json_serialize_plan.test` — [wrong result] line 10
+- `test/sql/limit/test_batch_limit_filters.test` — [wrong result] line 14
+- `test/sql/logging/logging_csv.test` — [wrong result] line 18
+- `test/sql/logging/logging_types.test` — [wrong row count] line 15
+- `test/sql/optimizer/predicate_factoring.test` — [wrong result] line 92
+- `test/sql/optimizer/test_in_rewrite_rule.test` — [unexpected error: Conversion Error: Could not convert string ? to INT#] line 15
+- `test/sql/order/hugeint_order_by_extremes.test` — [unexpected error: Invalid Error: Unoptimized statement differs from original result!] line 14
+- `test/sql/sample/test_sample_too_big.test` — [unexpected error: Out of Memory Error: Allocation failure] line 28
+- `test/sql/secrets/create_secret_expression.test` — [unexpected error: IO Error: Failed to initialize persistent storage directory. (original] line 21
+- `test/sql/settings/errors_as_json.test` — [statement error: message mismatch] line 11
+- `test/sql/settings/test_disabled_file_systems.test` — [statement error: expected error, got success] line 37
+- `test/sql/settings/test_disabled_local_filesystem_metadata.test` — [statement error: expected error, got success] line 22
+- `test/sql/storage/checkpoint/test_checkpoint_failure_delayed_commit.test` — [INTERNAL/fatal error] line 32
+- `test/sql/storage/checkpoint/test_checkpoint_failure_delayed_rollback.test` — [INTERNAL/fatal error] line 32
+- `test/sql/storage/checkpoint/test_checkpoint_failure_on_detach.test` — [INTERNAL/fatal error] line 20
+- `test/sql/storage/wal/wal_promote_version.test` — [unexpected error: Catalog Error: Table with name T does not exist!] line 32
+- `test/sql/timezone/disable_timestamptz_casts.test` — [unexpected error: Binder Error: Casting from TIMESTAMP to TIMESTAMP WITH TIME ZONE without a] line 22
+- `test/sql/timezone/test_icu_calendar.test` — [wrong result] line 110
+- `test/sql/transactions/statement-preprocessor/multistatement_is_transactional_chained_BEGIN.test` — [statement error: expected error, got success] line 24
+- `test/sql/transactions/statement-preprocessor/multistatement_is_transactional_chained_BEGIN_body_COMMIT.test` — [statement error: expected error, got success] line 24
+- `test/sql/transactions/statement-preprocessor/multistatement_is_transactional_chained_PRAGMA_BEGIN.test` — [statement error: expected error, got success] line 21
+- `test/sql/types/nested/map/map_from_entries/data_types.test` — [statement error: message mismatch] line 125
+- `test/sql/types/timestamp/test_timestamp_tz.test` — [statement error: expected error, got success] line 24
+- `test/sql/types/type/test_make_get_type.test` — [wrong result] line 4
+- `test/sql/window/test_lead_lag.test` — [unexpected error: Out of Range Error: Overflow in subtraction of INT# (# - -#)!] line 121
+- `test/sql/window/test_volatile_independence.test` — [wrong result] line 10
+
+---
+
 Every one of the 224 failing files was re-run and classified for this document
 (verbose rerun 2026-06-09, reproduced 224/224; two extra files appeared only
 under `-j 4` load and are listed under "Flaky" at the end). Classification is

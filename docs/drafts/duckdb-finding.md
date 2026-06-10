@@ -1,4 +1,10 @@
-# DuckDB divergence note (draft, NOT filed) — status: bisect pending
+# DuckDB divergence note (draft, NOT filed) — status: FALSIFIED, do not file
+
+> **FALSIFIED (2026-06-10).** The noopt bisect + native CLI comparison proved
+> BOTH "divergences" below were OUR runner bugs (FLOAT-expectation parsing;
+> bare loop-var conditions), both since fixed — there is no engine divergence
+> to report. Kept only as a record of the investigation; see
+> [docs/drafts/README.md](README.md).
 
 While running DuckDB's own sqllogictest corpus (3,322 `.test` files; 43,565 /
 43,789 records pass = 99.49%) against a pure-Go build of DuckDB v1.5.3

@@ -11,8 +11,15 @@ export GOTOOLCHAIN=go1.25.6
 export CGO_ENABLED=0
 export PATH="$(go env GOPATH)/bin:/opt/homebrew/bin:$PATH"
 
+# Pinned transpiler (issue #1): never run a bare `wasm2go` from PATH — binaries
+# built from v0.3.0..v0.4.6 had a lazy-evaluation output-corruption bug
+# (upstream ncruces/wasm2go#31, fixed v0.4.7) that silently poisons gen.go.
+WASM2GO_VERSION=${WASM2GO_VERSION:-v0.4.9}
+wasm2go() { go run "github.com/ncruces/wasm2go@$WASM2GO_VERSION" "$@"; }
+
 echo "[$TAG] === transpile $W ==="
 time wasm2go -pkg duckdbcore -o "$GEN" "$W" || { echo "[$TAG] wasm2go FAILED"; exit 1; }
+echo "wasm2go $WASM2GO_VERSION" > "$CDIR/genpkg/TRANSPILER_VERSION"
 ls -lah "$GEN"
 
 echo "[$TAG] === invoke-set check (regen if mismatch) ==="

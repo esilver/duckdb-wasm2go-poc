@@ -33,15 +33,17 @@ proto/graph features with no assertable cases. See
 
 | Metric | Result |
 |---|---|
-| Test files | **2,309 PASS** of 3,322 (the rest fail or skip on unsupported directives / missing extensions) |
-| Individual records | **99.49%** of 43,789 executed records pass |
+| Test files | **2,513 PASS / 20 FAIL / 789 SKIP** of 3,322 — **99.2% pass rate excluding skips** (2026-06-10) |
+| Skips | unsupported test *directives* (`load` restart protocol, `require parquet/tpch/httpfs/...`), not engine failures |
 
 Measured with the runner committed in this repo at
 [`converge/cmd/sqllogic`](converge/cmd/sqllogic/main.go) (a Go implementation
 of DuckDB's sqllogictest dialect: query/statement records, sort modes, md5
-hashing, loops, skipif/onlyif, float epsilon comparison). The remaining gaps
-are concentrated in filesystem-glob tests, error-message fidelity, and a few
-exotic-type edge cases — not core SQL execution.
+hashing, loops, skipif/onlyif, float epsilon comparison). The canonical
+root-cause classification of every remaining failure — error-message
+fidelity, logging parity, a handful of deep-semantics singles — is
+[`converge/cmd/sqllogic/KNOWN-LIMITS.md`](converge/cmd/sqllogic/KNOWN-LIMITS.md);
+none of the 20 is core SQL execution.
 
 ### Downstream: a pure-Go BigQuery emulator
 
@@ -51,19 +53,25 @@ directive in `go.mod`, pointing `goccy/googlesqlite` at the pure-Go fork tag),
 and is acceptance-tested end-to-end with the **real `bq` CLI** against the
 running emulator.
 
-### Performance (the honest caveat)
+### Performance
 
-This route delivers pure-Go DuckDB **semantics, not speed**: roughly
-**5–22× slower than native DuckDB** (widest on SIMD-friendly scan/aggregate,
-narrower on join/hash/string-heavy work). Two structural causes: wasm2go has
-no SIMD support (the wasm is built `-mno-simd128`), and the transpiled engine
-package can only be compiled with Go optimization disabled (`-N -l`) — full
-optimization OOMs the Go compiler on a package this size. Benchmarks and the
-tuning levers already exhausted are in
+This route delivers pure-Go DuckDB semantics first; speed is now respectable
+rather than painful. The **optimized engine layout** (`-tags genopt` in this
+workspace; what `duckdb-go-pure` ships since v0.3.x) compiles **fully
+optimized** — no `-N`, no `-l` — runs queries **2.3–2.9× faster** than the
+no-opt reference build, and is what made `GOOS=js`/browser builds possible at
+all. The remaining structural gap vs native DuckDB is SIMD: wasm2go has no
+SIMD support, so the wasm is built `-mno-simd128`.
+
+*History:* the original engine package could only be compiled with Go
+optimization disabled (`-N -l` — full optimization OOMed the Go compiler on a
+package that size), which put that build at roughly **5–22× slower than
+native DuckDB** (widest on SIMD-friendly scan/aggregate, narrower on
+join/hash/string-heavy work). Benchmarks and the tuning-lever log are in
 [RESULTS-runnable-poc.md](RESULTS-runnable-poc.md).
 
-**Optimized engine (`-tags genopt`):** the second cause is now solved by two
-transforms run via `GENOPT=1 ./rebuild_fs_all.sh`: a multi-package shard
+**How the optimized engine works:** two transforms run via
+`GENOPT=1 ./rebuild_fs_all.sh`: a multi-package shard
 ([scripts/transform_genopt.py](scripts/transform_genopt.py), step 4c) — the
 42.5k generated `fnNNN` methods become free functions across
 `converge/genopt/{core,shardNN}` (cross-shard calls through `TBL_FnN`
@@ -74,17 +82,19 @@ semantically identical part-functions, which keeps the inliner's IR bounded.
 With both, every genopt package compiles **fully optimized, no `-l`**
 (0.4–3.4GB peak per package vs >50GB OOM before) and queries run
 **2.3–2.9× faster** than the `-N -l` build of the same source (1.9× on the
-sqllogictest corpus wall clock). Select the engine with `-tags genopt` plus
-the per-package flags in
-[`converge/duckdb/module_engine_genopt.go`](converge/duckdb/module_engine_genopt.go)
-(now just `-gcflags='duckdbconverge/genopt/...=-c=1'`). Note the transform
+sqllogictest corpus wall clock). In this workspace the engine is selected
+with `-tags genopt` alone (see
+[`converge/duckdb/module_engine_genopt.go`](converge/duckdb/module_engine_genopt.go));
+`-gcflags='duckdbconverge/genopt/...=-c=1'` is **optional** RAM bounding for
+the compile, not a requirement. Note the transform
 runs on the **pre-inline** transpile: the step-4b textual inliner pre-expands
 the IR at source level, which OOMs the optimizer the same way (>28GB
 observed) — the two optimizations do not compose. The splitter is also what
 makes `GOOS=js` builds possible at all: the largest function (36.5k lines)
 exceeded the Go compiler's 65536-SSA-block hard cap. The monolithic `genpkg`
 (default tag, textually inlined, `-N -l`) remains the reference engine. The
-optimized layout ships as `duckdb-go-pure` v0.3.0.
+optimized layout ships as `duckdb-go-pure` **v0.3.2** — flag-free for
+consumers since v0.3.1 (plain `go build`, no tags, no gcflags).
 
 ## How it works
 
@@ -131,7 +141,7 @@ limit, bundling `core_functions`, `-DNDEBUG`) are written up in
 | Repo | What it is |
 |---|---|
 | **this repo** | the engine build pipeline (emcc → wasm2go → Go), the converge host/driver workspace, the sqllogictest runner, and the engineering log |
-| [esilver/duckdb-go-pure](https://github.com/esilver/duckdb-go-pure) | **the library to use**: go-gettable pure-Go DuckDB `database/sql` driver (v0.1.x), transpiled engine committed in-repo |
+| [esilver/duckdb-go-pure](https://github.com/esilver/duckdb-go-pure) | **the library to use**: go-gettable pure-Go DuckDB `database/sql` driver (v0.3.x, fully-optimized engine, flag-free build), transpiled engine committed in-repo |
 | [esilver/googlesqlite](https://github.com/esilver/googlesqlite) (branch `pure-go-duckdb-backend`) | BigQuery/GoogleSQL dialect on the pure-Go engine — 986/994 conformance, plus an interactive REPL ([CLI-PURE-GO.md](https://github.com/esilver/googlesqlite/blob/pure-go-duckdb-backend/CLI-PURE-GO.md)) |
 | [esilver/bigquery-emulator](https://github.com/esilver/bigquery-emulator/tree/pure-go-duckdb-backend) | the goccy BigQuery emulator running fully pure-Go, `bq`-CLI acceptance-tested |
 
@@ -160,9 +170,16 @@ Key invariants the scripts encode:
   defines and exports its own memory and `__indirect_function_table`.
 - **`-Oz -DNDEBUG`** on the wasm: small functions keep the Go compile
   feasible; release asserts avoid 32-bit-`long` debug-check artifacts.
-- The engine Go package compiles **only** with
-  `-gcflags='duckdbconverge/genpkg=-N -l -c=16'` (scoped no-opt; everything
-  else optimizes normally) and tests need `-vet=off`.
+- The **monolithic** engine package (`genpkg`, the default-tag reference
+  engine) compiles only with `-gcflags='duckdbconverge/genpkg=-N -l -c=16'`
+  (scoped no-opt; everything else optimizes normally) and tests need
+  `-vet=off`. The sharded `genopt` layout has no such restriction — it
+  compiles fully optimized.
+- **wasm2go is pinned**: the scripts invoke
+  `go run github.com/ncruces/wasm2go@v0.4.9` (override with
+  `WASM2GO_VERSION`), the rebuild scripts refuse versions below v0.4.7
+  (output-corruption bug in v0.3.0–v0.4.6, upstream issue 31), and the
+  version used is recorded in `converge/genpkg/TRANSPILER_VERSION`.
 
 Step-by-step detail, the exact emcc flags, shape verification
 (`verify_shape.sh`), and the build-wall narrative live in

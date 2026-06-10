@@ -186,9 +186,10 @@ of the exercise.)
 `SELECT sum(i) FROM range(5_000_000) t(i) WHERE (i % 3) = 0` (native DuckDB's
 SIMD-vectorized best case, our worst): 434 ms pure Go vs ~20 ms native — ~22×.
 Join/hash/string-heavy workloads narrow toward the ~5–10× range. The two
-structural caps are forced `-N -l` on the generated package and `-mno-simd128`;
-both are wasm2go-adjacent rather than engine problems, and both have known
-paths (package sharding; Go's SIMD experiment).
+structural caps were forced `-N -l` on the generated package and `-mno-simd128`;
+both are wasm2go-adjacent rather than engine problems. The first has since
+been REMOVED (package sharding + function splitting — see the addendum below);
+the second still awaits Go's SIMD experiment.
 
 ---
 
@@ -219,10 +220,11 @@ to a week of plumbing.
 Everything above was measured on the unoptimized (-N -l) engine. Since then,
 on the same transpiled output:
 
-- Corpus: **2,505 / 28 / 789 files** (99.1% of executed); every previously
-  suspected transpiler/engine divergence was investigated and **exonerated 6/6**
-  (all were our glue: test runner, driver locking, exception-host catch
-  dispatch, hand-written FS shim).
+- Corpus: **2,513 PASS / 20 FAIL / 789 SKIP files** (99.2% excluding skips;
+  canonical tally in `converge/cmd/sqllogic/KNOWN-LIMITS.md`); every
+  previously suspected transpiler/engine divergence was investigated and
+  **exonerated** (all were our glue: test runner, driver locking,
+  exception-host catch dispatch, hand-written FS shim).
 - Engine speed: ~10x compound vs the -N -l build (textual inlining -> sharded
   full optimization -> function splitting enabling the Go inliner).
 - The function splitter (scripts/split_giant_fns.py, pipeline step 4d) removes

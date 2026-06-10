@@ -5,9 +5,12 @@ monolithic gen.go OOMs at >50GB with optimizations on, hence genpkg's -N -l).
 
 Validated full-scale 2026-06-10 (chain A): 42.5k methods -> core + 29 shards,
 cross-shard calls through TBL_FnN func-vars registered by shard init()s.
-Compiles in ~131s / 2.75GB peak with PER-PACKAGE flags — core '-c=1', shards
-'-l -c=1' ('-l' is MANDATORY for shards: default inlining re-expands the IR
-and OOMs at ~50GB). Delivers 2.0-2.6x on query workloads vs the -N -l genpkg.
+Compiles in ~131s / 2.75GB peak. Historical note: this transform alone needed
+'-l' on the shards (default inlining re-expanded the IR and OOMed at ~50GB);
+since pipeline step 4d (scripts/split_giant_fns.py splits every >8k-line
+function) '-l' is NO LONGER NEEDED — every package compiles fully optimized,
+and '-c=1' is optional RAM bounding, not a requirement. Delivers 2.3-2.9x on
+query workloads vs the -N -l genpkg.
 
 Mechanics (each proven against a real debug cycle):
 - Renames ALL top-level lowercase decls (funcs, vars, types, consts, Module
@@ -33,9 +36,10 @@ optimizer compiles each small package with full optimization instead.
 Output: converge/genopt/{core,shardNN,all}; importers use genopt/core for
 Module/New plus a blank import of genopt/all (pulls in every shard init()).
 
-Build recipe (rebuild_fs_all.sh step 4c, GENOPT=1):
-  go build -p 1 -gcflags='duckdbconverge/genopt/...=-l -c=1' \
-           -gcflags='duckdbconverge/genopt/core=-c=1' -tags genopt ./duckdb/...
+Build recipe (rebuild_fs_all.sh step 4c2, GENOPT=1 — after step 4d, no '-l'):
+  go build -tags genopt -p 1 \
+           -gcflags='duckdbconverge/genopt/...=-c=1' ./duckdb/...
+  (-p 1 / -c=1 only bound compile RAM; a plain 'go build -tags genopt' works)
 
 Run from anywhere: python3 scripts/transform_genopt.py [K] [SHARD_SIZE]
 GENOPT_SRC=<dir> overrides the input dir (default converge/genpkg); it must

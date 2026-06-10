@@ -9,6 +9,20 @@ export PATH="$(go env GOPATH)/bin:/opt/homebrew/bin:$PATH"
 export GOTOOLCHAIN=go1.25.6 CGO_ENABLED=0
 WASM=$HERE/duckdb_fs.wasm
 
+# --- transpiler pin + version gate (issue #1) -------------------------------
+# Never run a bare `wasm2go` from PATH (the GOPATH/bin export above would win):
+# v0.3.0..v0.4.6 had a lazy-evaluation output-corruption bug (upstream
+# ncruces/wasm2go#31, fixed v0.4.7) that silently regenerates a corrupted
+# engine and propagates into duckdb-go-pure via import_engine.sh.
+WASM2GO_VERSION=${WASM2GO_VERSION:-v0.4.9}
+WASM2GO_MIN=v0.4.7
+if [[ "$(printf '%s\n' "$WASM2GO_MIN" "$WASM2GO_VERSION" | sort -V | head -n1)" != "$WASM2GO_MIN" ]]; then
+  echo "FATAL: wasm2go $WASM2GO_VERSION < $WASM2GO_MIN — versions v0.3.0..v0.4.6 emit memory-corrupted Go (upstream issue 31). Set WASM2GO_VERSION=$WASM2GO_MIN or newer." >&2
+  exit 1
+fi
+wasm2go() { go run "github.com/ncruces/wasm2go@$WASM2GO_VERSION" "$@"; }
+# ----------------------------------------------------------------------------
+
 echo "### 1. build wasm (core_functions + host FS, NDEBUG, -Oz)"
 "$HERE/build_fs.sh" "$WASM"
 
@@ -22,6 +36,7 @@ NAMES=$(paste -sd, /tmp/ra_want.txt)
 echo "### 3. transpile (-embed -unsafe)"
 rm -f "$HERE/converge/genpkg/gen.go" "$HERE/converge/genpkg/gen.dat"
 wasm2go -embed -unsafe -pkg duckdbcore -o "$HERE/converge/genpkg/gen.go" "$WASM"
+echo "wasm2go $WASM2GO_VERSION" > "$HERE/converge/genpkg/TRANSPILER_VERSION"
 
 echo "### 4. split New()"
 python3 "$HERE/split_new.py" "$HERE/converge/genpkg/gen.go"
@@ -54,7 +69,7 @@ echo "### 4b. inline hot wasm helpers (textual; ~1.7-2x runtime, see scripts/inl
 python3 "$HERE/scripts/inline_helpers.py" "$HERE/converge/genpkg/gen.go"
 
 if [[ "${GENOPT:-0}" == 1 ]]; then
-  echo "### 4c2. genopt compile check (serial; core+shards -c=1; NO '-l' — step 4d made it unnecessary)"
+  echo "### 4c2. genopt compile check (NO '-l' — step 4d made it unnecessary; -p 1/-c=1 are optional RAM bounding, not selectors)"
   cd "$HERE/converge"
   time go build -tags genopt -p 1 \
     -gcflags='duckdbconverge/genopt/...=-c=1' ./duckdb/...

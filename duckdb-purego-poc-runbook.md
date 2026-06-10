@@ -1,12 +1,27 @@
 # DuckDB in pure Go (no-cgo): replication runbook
 
+> **HISTORICAL DOCUMENT (2026-06-08 snapshot — the PoC era).** Everything below
+> describes the original de-risking run, including stages that have since been
+> superseded. **The engine shipped**: DuckDB v1.5.3 in pure Go, published as
+> [`duckdb-go-pure`](https://github.com/esilver/duckdb-go-pure) v0.3.2,
+> 2,513/3,322 sqllogictest corpus files passing (20 FAIL / 789 SKIP — see
+> [`converge/cmd/sqllogic/KNOWN-LIMITS.md`](converge/cmd/sqllogic/KNOWN-LIMITS.md))
+> and 986/994 downstream BigQuery-dialect specs. For the **current** pipeline
+> use `./rebuild_fs_all.sh` (host-FS wasm, `GENOPT=1` for the fully-optimized
+> sharded engine) and read [README.md](README.md) +
+> [RESULTS-runnable-poc.md](RESULTS-runnable-poc.md). In particular, the
+> Stage 1 `duckdb_core.wasm` recipe below (`-O0`, `-sFILESYSTEM=0`, 12 exports,
+> 256,946 functions), the "go build is the new risk" sizing analysis, and the
+> "SELECT 1 ... IN FLIGHT" status table are all obsolete: the compile walls
+> fell (split_new.py, split_giant_fns.py), the build is `-Oz` + host FS + the
+> full C-API export list, and SELECT 1 has long since become a full SQL engine.
+
 Purpose: a step-by-step guide to reproduce what we are building - a pure-Go, no-cgo DuckDB that runs
 `SELECT 1` (and beyond) with `CGO_ENABLED=0`, via the wasm2go transpile route. Also documents how to
 reproduce the de-risking probes so the claims can be independently verified.
 
 Companion analysis (the "why" behind every choice): `googlesqlite-wasm2go-spike.md`. This file is the
-"how". Status: active, 2026-06-08. The build stage is still converging (the exact emcc flag set is
-being iterated), everything downstream is proven end to end.
+"how". Status: HISTORICAL (see banner above); originally "active, 2026-06-08".
 
 ---
 
@@ -29,7 +44,7 @@ wasm runtime.
 |---|---|---|
 | Emscripten (`emcc`) | 4.0.6 | `brew install emscripten` |
 | Go | 1.25.x | `brew install go` |
-| `wasm2go` | v0.4.9 | `go install github.com/ncruces/wasm2go@latest` (lands in `$(go env GOPATH)/bin`) |
+| `wasm2go` | **v0.4.9, pinned** | none needed — the scripts invoke `go run github.com/ncruces/wasm2go@v0.4.9`. Do NOT use a bare `@latest`-installed PATH binary: v0.3.0–v0.4.6 silently emit memory-corrupted Go (upstream issue 31, fixed v0.4.7); the rebuild scripts gate on ≥ v0.4.7 |
 | `wasm-tools` | 1.251.0 | `brew install wasm-tools` |
 | `wabt` (`wasm-objdump`) | 1.0.41 | `brew install wabt` |
 | cmake, python3, clang | system | for the DuckDB amalgamation |

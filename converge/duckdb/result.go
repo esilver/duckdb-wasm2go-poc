@@ -24,6 +24,7 @@ import (
 	"math"
 	"math/big"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -89,7 +90,15 @@ var epoch = time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
 // freeing the resPtr buffer (mod.free). driver.go must NOT free resPtr itself once
 // newRows has succeeded.
 type rows struct {
-	mod    *module
+	mod *module
+	// mu is the conn's engine mutex (shared by every pooled conn on this
+	// engine). database/sql only reserves the rows' OWN conn while rows are
+	// open — a sibling pooled conn can Exec concurrently — and the wasm engine
+	// is single-threaded with ONE shadow-stack pointer global, so Next/Close
+	// MUST take this lock around every engine call. (Unlocked rows iteration
+	// racing a sibling conn's bind/exec corrupted the engine heap: the
+	// "bind_varchar runaway" spinning in a cycled libc++ hash-bucket chain.)
+	mu     *sync.Mutex
 	resPtr int32 // duckdb_result* (the by-value struct buffer in module memory)
 
 	names   []string
@@ -176,11 +185,15 @@ func (info enumInfo) value(mod *module, dataPtr int32, row int) driver.Value {
 }
 
 // newRows reads the result's column metadata and returns a streaming driver.Rows.
-// It takes ownership of resPtr (see rows ownership comment).
-func newRows(mod *module, resPtr int32) (driver.Rows, error) {
+// It takes ownership of resPtr (see rows ownership comment). mu is the conn's
+// engine mutex; callers hold it already (newRows itself makes engine calls),
+// and the returned rows re-takes it in Next/Close, which database/sql invokes
+// AFTER the locked query call has returned.
+func newRows(mod *module, mu *sync.Mutex, resPtr int32) (driver.Rows, error) {
 	n := int(mod.m.Xduckdb_column_count(resPtr)) // by-value result -> resPtr directly
 	r := &rows{
 		mod:         mod,
+		mu:          mu,
 		resPtr:      resPtr,
 		names:       make([]string, n),
 		typeIDs:     make([]int32, n),
@@ -237,8 +250,11 @@ func (r *rows) Columns() []string { return r.names }
 func (r *rows) ColumnTypeDatabaseTypeName(index int) string { return r.typeNames[index] }
 
 // Close releases the current chunk (if any), destroys the engine-side result, and
-// frees the resPtr buffer. Safe to call more than once.
+// frees the resPtr buffer. Safe to call more than once. Takes the engine lock:
+// a sibling pooled conn may be mid-statement on the shared engine.
 func (r *rows) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.closed {
 		return nil
 	}
@@ -270,7 +286,11 @@ func (r *rows) releaseChunk() {
 }
 
 // Next decodes the next row into dest. Returns io.EOF when the result is drained.
+// Takes the engine lock for the duration: fetch_chunk/vector reads enter the
+// single-threaded engine, and sibling pooled conns run concurrently.
 func (r *rows) Next(dest []driver.Value) (err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	defer guardEnginePanic(&err)
 	mod := r.mod
 	// Advance to a chunk that still has rows.

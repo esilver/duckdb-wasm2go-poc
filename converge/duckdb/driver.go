@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 )
@@ -141,6 +142,11 @@ type conn struct {
 	owner  *connector
 	ownsDB bool
 	closed bool
+	// inTx tracks whether THIS duckdb_connection is inside an explicit
+	// BEGIN..COMMIT/ROLLBACK (driven by BeginTx or by the user executing
+	// transaction-control SQL directly). It gates automatic transaction
+	// recovery after failed statements: see recoverTxLocked.
+	inTx bool
 }
 
 var (
@@ -203,23 +209,141 @@ func (c *conn) prepareLocked(query string) (*stmt, error) {
 		if st != 0 {
 			destroyPrepare(mod, st)
 		}
+		// A failed PREPARE (parser/binder error) leaves the connection's
+		// autocommit transaction dangling just like a failed execute does;
+		// restore autocommit so the next statement is not poisoned.
+		c.recoverTxLocked()
 		return nil, fmt.Errorf("duckdb prepare: %s", orUnknown(msg))
 	}
 	return &stmt{c: c, handle: st, query: query}, nil
 }
 
+// ---- transaction-leak recovery (engine bug workaround, root-fixed here) -----
+//
+// ROOT CAUSE: in this wasm build, ANY failed statement (prepare-stage binder
+// errors included) leaves the duckdb_connection's autocommit transaction open
+// instead of rolling it back, so the NEXT statement on that connection fails
+// with "cannot start a transaction within a transaction". The recovery is a
+// ROLLBACK issued on the SAME connection, via mod.queryRaw (duckdb_query
+// directly) so it cannot recurse back through the prepare/exec paths.
+
+// recoverTxLocked restores autocommit on c after a failed statement. It is a
+// no-op inside an explicit transaction: there the user owns COMMIT/ROLLBACK
+// (DuckDB invalidates the transaction on failure; the user's ROLLBACK must
+// still find it). Outside one, any transaction still open on this connection
+// is the dangling autocommit transaction — ROLLBACK clears it; if nothing
+// dangles the ROLLBACK fails harmlessly ("no transaction is active") and the
+// error is ignored. Callers must hold c.mu.
+func (c *conn) recoverTxLocked() {
+	if c.inTx || c.closed {
+		return
+	}
+	_, _ = c.mod.queryRaw(c.con, "ROLLBACK")
+}
+
+// noteTxSuccessLocked updates c.inTx after query executed SUCCESSFULLY,
+// scanning every top-level statement (Exec may carry a multi-statement batch)
+// for transaction-control keywords. Callers must hold c.mu.
+func (c *conn) noteTxSuccessLocked(query string) {
+	forEachStatement(query, func(stmt string) {
+		switch txBoundary(stmt) {
+		case 1:
+			c.inTx = true
+		case -1:
+			c.inTx = false
+		}
+	})
+}
+
+// noteTxFailureLocked handles a FAILED execution of query: a failed
+// COMMIT rolls the transaction back and a failed ROLLBACK means none was
+// active, so either way no transaction remains; for anything else restore
+// autocommit (no-op inside an explicit transaction). Callers must hold c.mu.
+func (c *conn) noteTxFailureLocked(query string) {
+	if txBoundary(query) < 0 {
+		c.inTx = false
+		return
+	}
+	c.recoverTxLocked()
+}
+
+// txBoundary classifies a statement by its leading keyword: +1 starts an
+// explicit transaction (BEGIN/START), -1 ends one (COMMIT/ROLLBACK/ABORT),
+// 0 otherwise.
+func txBoundary(stmt string) int {
+	var word string
+	for _, f := range strings.Fields(stmt) {
+		word = f
+		break
+	}
+	switch strings.ToUpper(word) {
+	case "BEGIN", "START":
+		return 1
+	case "COMMIT", "ROLLBACK", "ABORT":
+		return -1
+	}
+	return 0
+}
+
+// forEachStatement calls fn for each ';'-separated top-level statement of
+// query, skipping over single/double-quoted strings (dollar-quoting is not
+// handled; transaction keywords do not hide in dollar-quoted bodies in
+// practice, and a misclassification only perturbs the inTx hint).
+func forEachStatement(query string, fn func(stmt string)) {
+	start := 0
+	for i := 0; i < len(query); i++ {
+		switch query[i] {
+		case '\'', '"':
+			q := query[i]
+			for i++; i < len(query) && query[i] != q; i++ {
+			}
+		case ';':
+			fn(query[start:i])
+			start = i + 1
+		}
+	}
+	if start <= len(query) {
+		fn(query[start:])
+	}
+}
+
 // ExecContext implements driver.ExecerContext by preparing, executing, and
-// destroying a one-shot statement.
+// destroying a one-shot statement. Argument-less multi-statement text (which
+// duckdb_prepare rejects) falls back to direct duckdb_query execution.
 func (c *conn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (res driver.Result, err error) {
 	defer guardEnginePanic(&err)
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.execLocked(query, args)
+}
+
+// execLocked is the shared Exec path (ExecContext, simpleExec). It prepares
+// and executes query; when there are no bind args and duckdb_prepare rejected
+// the text as multi-statement, it retries through mod.queryRaw (duckdb_query),
+// which runs every statement and reports the last one's rows-changed count.
+// QueryContext deliberately has NO such fallback: database/sql's Query is a
+// single-result contract. Callers must hold c.mu.
+func (c *conn) execLocked(query string, args []driver.NamedValue) (driver.Result, error) {
 	st, err := c.prepareLocked(query)
 	if err != nil {
+		if len(args) == 0 && isMultiStatementErr(err) {
+			n, qerr := c.mod.queryRaw(c.con, query)
+			if qerr != nil {
+				c.noteTxFailureLocked(query)
+				return nil, qerr
+			}
+			c.noteTxSuccessLocked(query)
+			return &result{rowsAffected: n}, nil
+		}
 		return nil, err
 	}
 	defer st.closeLocked()
 	return st.execLocked(args)
+}
+
+// isMultiStatementErr matches duckdb_prepare's refusal of multi-statement SQL.
+func isMultiStatementErr(err error) bool {
+	return strings.Contains(err.Error(), "Cannot prepare multiple statements at once")
 }
 
 // QueryContext implements driver.QueryerContext by preparing and executing a
@@ -281,12 +405,7 @@ func (c *conn) simpleExec(query string) error {
 	if c.closed {
 		return driver.ErrBadConn
 	}
-	st, err := c.prepareLocked(query)
-	if err != nil {
-		return err
-	}
-	defer st.closeLocked()
-	_, err = st.execLocked(nil)
+	_, err := c.execLocked(query, nil)
 	return err
 }
 
@@ -405,11 +524,13 @@ func (s *stmt) execLocked(args []driver.NamedValue) (driver.Result, error) {
 		err := fmt.Errorf("duckdb execute: %s", orUnknown(mod.lastError()))
 		mod.m.Xduckdb_destroy_result(resPtr)
 		mod.free(resPtr)
+		s.c.noteTxFailureLocked(s.query)
 		return nil, err
 	}
 	affected := mod.m.Xduckdb_rows_changed(resPtr)
 	mod.m.Xduckdb_destroy_result(resPtr)
 	mod.free(resPtr)
+	s.c.noteTxSuccessLocked(s.query)
 	return &result{rowsAffected: affected}, nil
 }
 
@@ -430,8 +551,10 @@ func (s *stmt) queryLocked(args []driver.NamedValue) (driver.Rows, error) {
 		err := fmt.Errorf("duckdb execute: %s", orUnknown(mod.lastError()))
 		mod.m.Xduckdb_destroy_result(resPtr)
 		mod.free(resPtr)
+		s.c.noteTxFailureLocked(s.query)
 		return nil, err
 	}
+	s.c.noteTxSuccessLocked(s.query)
 	return newRows(mod, resPtr)
 }
 

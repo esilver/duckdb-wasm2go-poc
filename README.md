@@ -1,204 +1,157 @@
-# DuckDB-core -> standalone WASM -> wasm2go PoC
+# DuckDB in pure Go: wasm2go engine pipeline
 
-Proof of concept for compiling DuckDB to a **standalone** WebAssembly module that
-[`ncruces/wasm2go`](https://github.com/ncruces/wasm2go) can transpile into pure Go,
-so DuckDB can eventually run on a Go runtime with no CGo and no wazero.
+This repo started as a proof of concept ("can DuckDB survive a trip through
+[`ncruces/wasm2go`](https://github.com/ncruces/wasm2go)?"). It is now the
+**build pipeline and engineering log for a working pure-Go DuckDB**:
+DuckDB **v1.5.3** (with the `core_functions`, `json` and `icu` extensions
+statically linked) compiled to a standalone WebAssembly module, transpiled to
+plain Go, and driven through the DuckDB C API — **`CGO_ENABLED=0`, no cgo, no
+shared libraries, no wasm runtime**.
 
-**Result: it works - and it now RUNS.** The full DuckDB v1.5.3 C-API amalgamation
-compiles to a standalone wasm in the required shape, wasm2go ingests it with zero
-unsupported opcodes, the generated Go compiles, and **DuckDB executes real SQL in
-pure Go with `CGO_ENABLED=0`** - no cgo, no wasm runtime - including aggregates,
-`GROUP BY`/`ORDER BY`, string functions, and caught C++ exceptions. The runnable
-results, the four build walls and how each fell, the benchmark, and error-message
-handling are in **[RESULTS-runnable-poc.md](RESULTS-runnable-poc.md)**. This README
-documents the build/transpile/shape step; see [Status](#status) for what's proven.
+The result is not a toy. It ships as a go-gettable `database/sql` driver
+([`duckdb-go-pure`](https://github.com/esilver/duckdb-go-pure)), supports
+scalar and aggregate UDFs written as Go closures, persists databases to the
+host filesystem, and passes large third-party test corpora (numbers below).
 
-Built and verified 2026-06-08 on macOS arm64 (16 GB).
+## Results
 
-## Why this exact shape
+### BigQuery dialect conformance (googlesqlite spec suite, 994 specs)
 
-wasm2go needs a **standalone** module: one that *defines and exports* its own
-linear memory and function table, with **no `dylink.0` custom section** and **no
-GOT imports**.
+| Backend | PASS | FAIL | SKIP |
+|---|---|---|---|
+| **pure-Go DuckDB (this engine)** | **986** | **0** | 8 |
+| native DuckDB via cgo (baseline) | 972 | 14 | 8 |
 
-DuckDB's own wasm build (`Makefile` `wasm_mvp`/`wasm_eh`) uses
-`-DWASM_LOADABLE_EXTENSIONS=1`, which produces an Emscripten `MAIN_MODULE`
-*side-module* (has `dylink.0`, GOT imports, an *imported* memory) - the wrong
-shape; wazero/wasm2go cannot consume it. So this PoC does **not** use
-duckdb-wasm's CMake. It compiles the DuckDB **amalgamation** directly with `emcc`
-as a standalone module.
+The pure-Go backend **exceeds the cgo baseline with zero failures**. The cgo
+build's 14 `search`/`objectref` failures turned out to be a routing gap in the
+emulator (the pure-Go function bodies always existed but were never wired on
+the DuckDB path); the fix applies to both backends. The 8 skips are
+proto/graph features with no assertable cases. See
+[`googlesqlite` REPRODUCE-PURE-GO.md](https://github.com/esilver/googlesqlite/blob/pure-go-duckdb-backend/REPRODUCE-PURE-GO.md).
 
-Two further constraints:
+### DuckDB's own sqllogictest corpus (`duckdb-src/test/sql/**`)
 
-- **No SIMD.** wasm2go has zero SIMD support (it errors on opcode `0xFD`), so the
-  module must be built with `-mno-simd128` and no `simd128` target feature.
-- **Legacy (opcode-free) exceptions.** Use `-fexceptions`
-  /`-sDISABLE_EXCEPTION_CATCHING=0`, **not** `-fwasm-exceptions`. Legacy lowering
-  keeps the module free of the EH-proposal opcodes (`try_table`, `catch_all`,
-  `rethrow`, ...). The C++ `throw`/`catch` is realized through host-provided
-  `invoke_*` trampolines and the `__cxa_*` ABI, which a Go host wires up (see the
-  T1 reference host described under [Running it](#running-it-not-yet-done)).
+| Metric | Result |
+|---|---|
+| Test files | **2,309 PASS** of 3,322 (the rest fail or skip on unsupported directives / missing extensions) |
+| Individual records | **99.49%** of 43,789 executed records pass |
 
-## Layout
+Measured with the runner committed in this repo at
+[`converge/cmd/sqllogic`](converge/cmd/sqllogic/main.go) (a Go implementation
+of DuckDB's sqllogictest dialect: query/statement records, sort modes, md5
+hashing, loops, skipif/onlyif, float epsilon comparison). The remaining gaps
+are concentrated in filesystem-glob tests, error-message fidelity, and a few
+exotic-type edge cases — not core SQL execution.
 
-| Path | Committed? | What it is |
-|------|-----------|------------|
-| `README.md` | yes | this file |
-| `build.sh` | yes | the exact emcc command that links the standalone wasm |
-| `verify_shape.sh` | yes | shape verification (dylink/memory/table/GOT/EH/validate) on a wasm |
-| `transpile.sh` | yes | run wasm2go + parsecheck on a wasm |
-| `flagtest.cpp` | yes | tiny throwing C++ TU used to lock the flag set first |
-| `flagtest.wasm` | yes | the tiny TU built standalone (20 KB) - minimal shape proof |
-| `flagtest_gen.go` | yes | wasm2go output for the tiny TU (parses) |
-| `parsecheck/main.go`,`go.mod` | yes | `go/parser` harness that checks generated Go parses |
-| `amalg/` | **gitignored** | DuckDB v1.5.3 amalgamation (`duckdb.cpp`/`.h`/`.hpp`), from the release zip |
-| `libduckdb-src.zip` | **gitignored** | the downloaded amalgamation zip (4.7 MB) |
-| `duckdb/` | **gitignored** | shallow upstream clone (379 MB, used only to inspect scripts) |
-| `duckdb_core.wasm` | **gitignored** | the deliverable standalone wasm (85.8 MB) |
-| `duckdb_core_gen.go` | **gitignored** | wasm2go output for DuckDB (490 MB) |
-| `parsecheck/parsecheck` | **gitignored** | compiled parsecheck binary |
+### Downstream: a pure-Go BigQuery emulator
 
-The large binaries are **regenerable from the commands below** and are excluded
-from git to keep the repo usable. `build.sh` reproduces `duckdb_core.wasm`;
-`transpile.sh` reproduces `duckdb_core_gen.go`.
+[`bigquery-emulator`](https://github.com/esilver/bigquery-emulator/tree/pure-go-duckdb-backend)
+builds **out of the box from a fresh clone** with `CGO_ENABLED=0` (one `replace`
+directive in `go.mod`, pointing `goccy/googlesqlite` at the pure-Go fork tag),
+and is acceptance-tested end-to-end with the **real `bq` CLI** against the
+running emulator.
 
-## Toolchain (versions used)
+### Performance (the honest caveat)
 
-- emcc (Emscripten) **4.0.6** at `/opt/homebrew/bin/emcc`
-- `wasm2go` **v0.4.9**
-- Go **1.25.6** (darwin/arm64)
-- `wasm-tools` **1.251.0**, `wasm-objdump` (wabt) **1.0.41**
-- macOS arm64, 16 GB RAM
+This route delivers pure-Go DuckDB **semantics, not speed**: roughly
+**5–22× slower than native DuckDB** (widest on SIMD-friendly scan/aggregate,
+narrower on join/hash/string-heavy work). Two structural causes: wasm2go has
+no SIMD support (the wasm is built `-mno-simd128`), and the transpiled engine
+package can only be compiled with Go optimization disabled (`-N -l`) — full
+optimization OOMs the Go compiler on a package this size. A multi-package
+transform that splits the engine so it compiles fully optimized is prototyped
+and in validation. Benchmarks and the tuning levers already exhausted are in
+[RESULTS-runnable-poc.md](RESULTS-runnable-poc.md).
 
-## Reproduce
+## How it works
 
-### 1. Get the amalgamation (DuckDB v1.5.3)
-
-The in-repo `scripts/amalgamation.py` in current DuckDB is a gutted library with
-**no `__main__`** (its own header: "remnants of the once-proud amalgamation.py")
-- running it does nothing. Use the release asset instead:
-
-```sh
-gh release download v1.5.3 --repo duckdb/duckdb --pattern 'libduckdb-src.zip'
-mkdir -p amalg && (cd amalg && unzip -o ../libduckdb-src.zip)
-# -> amalg/duckdb.cpp (24.4 MB, 652,557 lines), amalg/duckdb.h (C API), amalg/duckdb.hpp
+```
+DuckDB v1.5.3 amalgamation + core_functions + json + icu     (C++)
+        │  emcc: standalone wasm, -Oz -DNDEBUG, legacy exceptions, no SIMD
+        ▼
+duckdb_fs.wasm        (standalone module: owns its memory + function table)
+        │  wasm2go -embed -unsafe          (zero unsupported opcodes)
+        ▼
+genpkg/gen.go         (one giant Go package; linear memory = []byte)
+        │  split_new.py  (chunk the function-table init the Go compiler chokes on)
+        ▼
+converge/             (Go host + database/sql driver, CGO_ENABLED=0)
 ```
 
-### 2. Build the standalone wasm
+Three host-side ideas make it real:
+
+1. **Legacy-EH exception host** (`converge/exhost`). The wasm is built with
+   *legacy* (opcode-free) Emscripten exceptions, so C++ `throw`/`catch`
+   becomes `invoke_*` trampolines + the `__cxa_*` ABI — which a Go host
+   implements with `panic`/`recover`. DuckDB's error handling (every failed
+   query is a caught C++ exception) works end-to-end with full message text.
+2. **WASI/syscall shim with a host filesystem** (`converge/wasishim`):
+   clock, rng, stdout, and a file layer so file-backed databases persist and
+   reopen across processes.
+3. **Go-closure UDF callbacks via the indirect function table.** wasm2go
+   renders the wasm function table as a Go `[]any` of funcs. The driver
+   appends a Go closure to that table and hands its index to
+   `duckdb_create_scalar_function` as the "C function pointer"; DuckDB
+   `call_indirect`s straight back into Go. This is what makes vectorized
+   scalar **and aggregate** UDFs possible with no C involved.
+
+The wasm-shape requirements (standalone module, no `dylink.0`, no GOT
+imports, no SIMD, no EH-proposal opcodes) and how each build wall fell
+(`-Oz` vs the 197k-function `-O0` build, the `NewBulk too big` compiler
+limit, bundling `core_functions`, `-DNDEBUG`) are written up in
+[RESULTS-runnable-poc.md](RESULTS-runnable-poc.md) and the spike notes
+([SPIKE-T1](SPIKE-T1-cpp-exceptions.md), [SPIKE-T2](SPIKE-T2-size-wall.md),
+[SWAP-BLUEPRINT.md](SWAP-BLUEPRINT.md)).
+
+## The repo family
+
+| Repo | What it is |
+|---|---|
+| **this repo** | the engine build pipeline (emcc → wasm2go → Go), the converge host/driver workspace, the sqllogictest runner, and the engineering log |
+| [esilver/duckdb-go-pure](https://github.com/esilver/duckdb-go-pure) | **the library to use**: go-gettable pure-Go DuckDB `database/sql` driver (v0.1.x), transpiled engine committed in-repo |
+| [esilver/googlesqlite](https://github.com/esilver/googlesqlite) (branch `pure-go-duckdb-backend`) | BigQuery/GoogleSQL dialect on the pure-Go engine — 986/994 conformance, plus an interactive REPL ([CLI-PURE-GO.md](https://github.com/esilver/googlesqlite/blob/pure-go-duckdb-backend/CLI-PURE-GO.md)) |
+| [esilver/bigquery-emulator](https://github.com/esilver/bigquery-emulator/tree/pure-go-duckdb-backend) | the goccy BigQuery emulator running fully pure-Go, `bq`-CLI acceptance-tested |
+
+If you just want to run SQL from Go, start at **duckdb-go-pure** — you never
+need this repo's pipeline unless you are regenerating the engine.
+
+## Reproducing the engine
+
+One command rebuilds everything from the DuckDB v1.5.3 sources on this
+machine class (macOS arm64; the transpile/compile steps want tens of GB of
+RAM):
 
 ```sh
-./build.sh           # wraps the emcc command; writes ./duckdb_core.wasm
+./rebuild_fs_all.sh   # build_fs.sh (emcc) -> regen exhost invokes ->
+                      # wasm2go -> split_new.py -> go build
 ```
 
-Key points the flags encode (do **not** change these or the shape breaks):
+Key invariants the scripts encode:
 
-- `-O0` - **required on a 16 GB machine.** `-O1` whole-module optimization
-  balloons clang past ~7 GB on the single 24 MB translation unit and thrashes
-  swap; it did not finish in budget here. `-O0` skips those passes (peak ~7.9 GB,
-  links in ~112 s). Shape is flag-driven, not opt-driven. For optimized builds,
-  split the amalgamation into unity chunks or use a bigger box.
-- `-std=c++17` - the amalgamation uses `std::string_view`/`std::optional`/
-  `if constexpr`; `-std=c++11` fails.
-- `-fexceptions -sDISABLE_EXCEPTION_CATCHING=0` - legacy exceptions. **Never**
-  `-fwasm-exceptions`.
-- `-mno-simd128` - wasm2go can't read SIMD.
-- `-sSTANDALONE_WASM --no-entry -sFILESYSTEM=0 -sALLOW_MEMORY_GROWTH=1` -
-  standalone shape, defines+exports its own memory/table.
-- **No** `-sMAIN_MODULE` / `-sWASM_LOADABLE_EXTENSIONS` (those make a side-module).
-- `-DDUCKDB_NO_THREADS=1 -DDUCKDB_DISABLE_EXTENSIONS`.
+- **Legacy exceptions only** (`-fexceptions`, never `-fwasm-exceptions`) and
+  **no SIMD** (`-mno-simd128`) — wasm2go cannot ingest EH-proposal or `0xFD`
+  opcodes.
+- **Standalone module shape** (`-sSTANDALONE_WASM`, no `-sMAIN_MODULE`):
+  defines and exports its own memory and `__indirect_function_table`.
+- **`-Oz -DNDEBUG`** on the wasm: small functions keep the Go compile
+  feasible; release asserts avoid 32-bit-`long` debug-check artifacts.
+- The engine Go package compiles **only** with
+  `-gcflags='duckdbconverge/genpkg=-N -l -c=16'` (scoped no-opt; everything
+  else optimizes normally) and tests need `-vet=off`.
 
-### 3. Verify the shape
+Step-by-step detail, the exact emcc flags, shape verification
+(`verify_shape.sh`), and the build-wall narrative live in
+[RESULTS-runnable-poc.md](RESULTS-runnable-poc.md) and
+[duckdb-purego-poc-runbook.md](duckdb-purego-poc-runbook.md). To refresh the
+published library from a new `gen.go`/`gen.dat`, see "Regenerating the
+engine" in the duckdb-go-pure README.
 
-```sh
-./verify_shape.sh ./duckdb_core.wasm
-```
+## Credits
 
-### 4. Transpile with wasm2go + parse-check
-
-```sh
-./transpile.sh ./duckdb_core.wasm    # wasm2go -> duckdb_core_gen.go, then go/parser
-```
-
-## Verified results (this is the deliverable)
-
-Shape of `duckdb_core.wasm` (85.8 MB, DuckDB v1.5.3):
-
-- **No `dylink.0`** - only one custom section, `target_features`.
-- **Defines + exports its own memory and table** - `memory[0] -> "memory"`
-  (283 pages initial, grows to 32768), `table[0] -> "__indirect_function_table"`
-  (47,438 entries). Neither is imported.
-- **No GOT imports** - `GOT.func`/`GOT.mem` count = 0.
-- **0 real EH opcodes** - strict instruction-position grep for
-  `try_table|catch_all|rethrow|delegate|throw_ref` = 0. (A loose substring grep
-  hits 2, but those are the *import names* `__cxa_rethrow` /
-  `__cxa_rethrow_primary_exception`, part of the legacy ABI - not the wasm opcode.)
-- **`wasm-tools validate --features=all,-exceptions` = PASS** - conclusive proof
-  the module has no dependency on EH-proposal opcodes.
-- `target_features`: bulk-memory(+opt), call-indirect-overlong, multivalue,
-  mutable-globals, nontrapping-fptoint, reference-types, sign-ext. **No
-  `simd128`, no `exception-handling`.**
-
-Imports - **352 total = 340 `env.*` + 12 `wasi_snapshot_preview1.*`**:
-
-- Legacy C++ EH family (host-wired): `__cxa_throw`,
-  `__cxa_find_matching_catch_2`/`_3`, `__cxa_begin_catch`, `__cxa_end_catch`,
-  `__resumeException`, `llvm_eh_typeid_for`, and a large `invoke_*` trampoline
-  family.
-- libc/WASI residual: 12 WASI fns (`fd_write`/`fd_read`/`fd_seek`/
-  `clock_time_get`/`environ_*`/...), 21 `env.__syscall_*`
-  (`socket`/`bind`/`connect`/`getcwd`/`ftruncate64`/`unlinkat`/...),
-  `emscripten_notify_memory_growth`, `getaddrinfo`, `getnameinfo`. These are OS
-  stubs the host provides; none are SIMD/EH blockers.
-
-Exports (35) - **all 13 requested C-API symbols present**: `duckdb_open`,
-`duckdb_connect`, `duckdb_query`, `duckdb_column_count`, `duckdb_row_count`,
-`duckdb_value_int64`, `duckdb_value_varchar`, `duckdb_result_error`,
-`duckdb_destroy_result`, `duckdb_disconnect`, `duckdb_close`,
-`duckdb_library_version`, plus `malloc`/`free`. Also the EH-ABI support surface
-(`setThrew`, `_emscripten_tempret_set`, `__cxa_*_exception_refcount`,
-`__cxa_can_catch`, ...) and exported `memory` + `__indirect_function_table`.
-
-wasm2go transpile:
-
-- **No "unsupported opcode" / no `0xFD`.** All 256,946 functions translated.
-  ~112 s, peak RSS 8.27 GB.
-- `duckdb_core_gen.go` = **513,993,411 bytes (~490 MB), 18,130,309 lines**.
-- Generated `Xenv` interface is exactly the legacy-EH ABI
-  (`Xinvoke_iii`, `X__cxa_throw`, `Xllvm_eh_typeid_for`, `X__resumeException`, ...),
-  so an existing legacy-EH Go host applies directly.
-- **`go/parser` parses it: `PARSED OK: package duckdbcore, 257341 top-level
-  decls, in 12.82 s`** (peak RSS 7.1 GB). Syntactically valid Go.
-
-The tiny `flagtest.wasm` (a single throwing C++ function) was used to lock the
-flag set first and shows the identical correct shape at 20 KB; its
-`flagtest_gen.go` also parses.
-
-## Status
-
-**Proven (build/transpile - this README):** the wasm builds in the right shape,
-validates without exceptions, has no SIMD, exports the C API, and wasm2go ingests
-it into parseable Go.
-
-**Proven (runnable - [RESULTS-runnable-poc.md](RESULTS-runnable-poc.md)):** the
-generated Go compiles and **DuckDB executes real SQL end-to-end in pure Go
-(`CGO_ENABLED=0`, no cgo, no wasm runtime)** - scalars, aggregates
-(`sum/min/max/avg/count`), `GROUP BY`/`ORDER BY`/`LIMIT`, string functions, and C++
-exception handling with full error-message text. All four items previously listed
-here as "remaining" are now resolved (details in RESULTS):
-
-1. **Memory/build wall** - building the wasm `-Oz` (33-39k *small* functions instead
-   of 197k) plus `split_new.py` (chunks wasm2go's giant `New()` table-init, which
-   overflowed the Go compiler's liveness bitmap) makes the 490 MB Go compile;
-   `-N -l` is scoped to `genpkg` because full Go `-O` OOMs on the package even at
-   64 GB.
-2. **Host interfaces** - the legacy-EH `Xenv` + WASI/syscall host is implemented
-   (`converge/exhost`, `converge/wasishim`).
-3. **`go build` on the generated Go** - compiles end to end (~7.5 min one-shot).
-4. **Execute a query** - done; aggregates, string functions, and caught exceptions
-   all run.
-
-**The one structural limit is performance.** No SIMD (wasm2go can't translate the
-`0xFD` opcode family, so the wasm is `-mno-simd128`) plus forced `-N -l` Go put this
-**~5-22x slower than native** (widest on SIMD-friendly scan/aggregate, narrower on
-join/hash/string-heavy work). This route delivers pure-Go DuckDB **semantics, not
-speed** - for real throughput, run native DuckDB out-of-process.
+- [DuckDB](https://github.com/duckdb/duckdb) — the engine itself (MIT,
+  Copyright Stichting DuckDB Foundation). This project compiles unmodified
+  DuckDB v1.5.3 sources; all SQL correctness is theirs.
+- [ncruces/wasm2go](https://github.com/ncruces/wasm2go) — the wasm-to-Go
+  transpiler that makes the whole approach possible, and
+  [ncruces/go-sqlite3](https://github.com/ncruces/go-sqlite3), whose
+  SQLite-via-wasm pattern this follows.

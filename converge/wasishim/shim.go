@@ -258,9 +258,29 @@ func (s *Shim) X__syscall_newfstatat(dirFd, pathPtr, bufPtr, flags int32) int32 
 	s.logf("STUB __syscall_newfstatat -> -ENOSYS")
 	return -wasiENOSYS
 }
+
+// __syscall_getcwd(buf, size): writes the host working directory NUL-terminated
+// into buf and returns the byte count INCLUDING the NUL (emscripten's
+// library_syscalls contract; -EINVAL for size==0, -ERANGE when it won't fit,
+// emscripten errno numbering). DuckDB's FileSystem::GetWorkingDirectory ("IO
+// Error: Could not get working directory!") and relative-path
+// canonicalization sit directly on this.
 func (s *Shim) X__syscall_getcwd(bufPtr, size int32) int32 {
-	s.logf("STUB __syscall_getcwd -> -ENOSYS")
-	return -wasiENOSYS
+	cwd, err := os.Getwd()
+	if err != nil || cwd == "" {
+		return -wasiENOSYS
+	}
+	if size == 0 {
+		return -28 // -EINVAL (emscripten numbering)
+	}
+	need := int32(len(cwd) + 1)
+	mem := s.memb()
+	if need > size || int(bufPtr)+int(need) > len(mem) {
+		return -68 // -ERANGE
+	}
+	copy(mem[bufPtr:], cwd)
+	mem[bufPtr+need-1] = 0
+	return need
 }
 func (s *Shim) X__syscall_unlinkat(dirFd, pathPtr, flags int32) int32 {
 	s.logf("STUB __syscall_unlinkat -> -ENOSYS")

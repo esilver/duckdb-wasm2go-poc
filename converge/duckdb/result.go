@@ -59,7 +59,10 @@ const (
 	dtTimeTz      = 30 // uint64: micros-since-midnight << 24 | encoded offset
 	dtTimestampTz = 31 // micros since epoch
 	dtUhugeint    = 32
+	dtBignum      = 35 // varint blob, physical VARCHAR (decodes via bignumString)
 	dtTimeNs      = 39 // nanos since midnight
+	dtGeometry    = 40 // WKB blob, physical VARCHAR (decodes via geometryString)
+	dtVariant     = 41 // physical STRUCT carrier (decodes via variantDec)
 )
 
 // DuckDB date/timestamp ±infinity sentinels (duckdb-src/src/include/duckdb/common/
@@ -309,7 +312,7 @@ func (r *rows) Next(dest []driver.Value) (err error) {
 			continue
 		}
 		switch r.typeIDs[col] {
-		case dtList, dtStruct, dtMap, dtUnion, dtArray:
+		case dtList, dtStruct, dtMap, dtUnion, dtArray, dtVariant:
 			// Nested result column (LIST/STRUCT/MAP/UNION/ARRAY, incl. arbitrary
 			// nesting): decode recursively via vecDecoder — LIST/ARRAY -> []any,
 			// STRUCT -> Struct (declared field order), MAP -> MapValue (entry
@@ -434,9 +437,21 @@ func (r *rows) decode(col int, dataPtr int32, row int) driver.Value {
 		return decimalValue(mod, r.decimalMeta[col], dataPtr, row)
 
 	case dtUuid:
-		// UUID is stored as a hugeint (16 bytes). Surface as its decimal-ish string
-		// form via the big.Int path; callers needing canonical UUID can reparse.
-		return hugeintValue(mod, dataPtr, row, true)
+		// UUID is stored as a hugeint (16 bytes) with the upper word's MSB
+		// flipped; render the canonical 8-4-4-4-12 form (BaseUUID::ToString).
+		return uuidString(mod, dataPtr, row)
+
+	case dtBignum:
+		// BIGNUM (varint) is VARCHAR-physical: a 3-byte-header big-endian
+		// magnitude blob; deliver the exact decimal string.
+		_, b := readStringT(mod, dataPtr+int32(row*16))
+		return bignumString(b)
+
+	case dtGeometry:
+		// GEOMETRY is VARCHAR-physical WKB; deliver the WKT text
+		// (Geometry::ToString).
+		_, b := readStringT(mod, dataPtr+int32(row*16))
+		return geometryString(b)
 
 	case dtInvalid:
 		return nil

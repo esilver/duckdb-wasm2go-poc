@@ -341,8 +341,15 @@ func (mod *module) writeCell(typeID, vec, dataPtr int32, row int64, v any) error
 		if !ok {
 			return fmt.Errorf("duckdb: cannot encode %T into DATE", v)
 		}
-		days := int32(t.UTC().Sub(epoch) / (24 * time.Hour))
-		mod.writeU32(dataPtr+int32(row*4), uint32(days))
+		// Floor-divide Unix seconds rather than Sub(epoch): a Duration is
+		// int64 nanos and saturates ±292y from epoch, silently corrupting
+		// any date outside 1678-2262 (BigQuery's range is 0001-9999).
+		secs := t.Unix()
+		days := secs / 86400
+		if secs%86400 < 0 {
+			days--
+		}
+		mod.writeU32(dataPtr+int32(row*4), uint32(int32(days)))
 		return nil
 
 	case dtTimestamp, dtTimestampTz:
@@ -350,8 +357,10 @@ func (mod *module) writeCell(typeID, vec, dataPtr int32, row int64, v any) error
 		if !ok {
 			return fmt.Errorf("duckdb: cannot encode %T into TIMESTAMP", v)
 		}
-		micros := t.UTC().Sub(epoch).Microseconds()
-		mod.writeU64(dataPtr+int32(row*8), uint64(micros))
+		// UnixMicro, not Sub(epoch).Microseconds(): the intermediate
+		// Duration saturates ±292y from epoch (see dtDate above); micros
+		// in int64 are good to year ±294246.
+		mod.writeU64(dataPtr+int32(row*8), uint64(t.UnixMicro()))
 		return nil
 
 	default:

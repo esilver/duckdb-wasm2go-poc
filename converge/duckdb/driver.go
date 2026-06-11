@@ -66,7 +66,6 @@ type connector struct {
 	mod  *module
 	db   int32
 	init bool
-	err  error
 }
 
 var (
@@ -89,19 +88,19 @@ func (c *connector) Connect(_ context.Context) (driver.Conn, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.init {
-		c.init = true
 		mod := newModule()
 		con, db, err := mod.open(c.dsn)
 		if err != nil {
-			c.err = err
+			// NOT latched: the next Connect retries the open from scratch, like
+			// native DuckDB retrying duckdb_open. A failed open can succeed
+			// later — e.g. another engine instance held the database-file lock
+			// ("Could not set lock on file ...") and has since closed.
 			return nil, err
 		}
+		c.init = true
 		c.mod, c.db = mod, db
 		// open() already made the first connection; reuse it.
 		return &conn{mod: mod, con: con, db: db, mu: &c.mu, owner: c}, nil
-	}
-	if c.err != nil {
-		return nil, c.err
 	}
 	con, err := c.mod.connect(c.db)
 	if err != nil {

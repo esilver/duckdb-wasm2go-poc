@@ -45,7 +45,8 @@ func (d *Driver) Open(dsn string) (driver.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &conn{mod: mod, con: con, db: db, mu: &mod.mu, ownsDB: true}, nil
+	return &conn{mod: mod, con: con, db: db, mu: &mod.mu, ownsDB: true,
+		intr: mod.resolveInterruptFlag(con)}, nil
 }
 
 // OpenConnector implements driver.DriverContext. database/sql reuses ONE connector
@@ -100,13 +101,15 @@ func (c *connector) Connect(_ context.Context) (driver.Conn, error) {
 		c.init = true
 		c.mod, c.db = mod, db
 		// open() already made the first connection; reuse it.
-		return &conn{mod: mod, con: con, db: db, mu: &c.mu, owner: c}, nil
+		return &conn{mod: mod, con: con, db: db, mu: &c.mu, owner: c,
+			intr: mod.resolveInterruptFlag(con)}, nil
 	}
 	con, err := c.mod.connect(c.db)
 	if err != nil {
 		return nil, err
 	}
-	return &conn{mod: c.mod, con: con, db: c.db, mu: &c.mu, owner: c}, nil
+	return &conn{mod: c.mod, con: con, db: c.db, mu: &c.mu, owner: c,
+		intr: c.mod.resolveInterruptFlag(con)}, nil
 }
 
 // Close implements io.Closer; database/sql calls it on sql.DB.Close. It closes the
@@ -141,6 +144,10 @@ type conn struct {
 	owner  *connector
 	ownsDB bool
 	closed bool
+	// intr is the VALIDATED linear-memory address of this connection's
+	// ClientContext.interrupted flag (resolveInterruptFlag; 0 if validation
+	// failed). armInterrupt pokes it on context cancellation.
+	intr int32
 	// inTx tracks whether THIS duckdb_connection is inside an explicit
 	// BEGIN..COMMIT/ROLLBACK (driven by BeginTx or by the user executing
 	// transaction-control SQL directly). It gates automatic transaction
@@ -178,12 +185,18 @@ func (c *conn) Prepare(query string) (driver.Stmt, error) {
 
 // PrepareContext implements driver.ConnPrepareContext. It compiles query into a
 // duckdb_prepared_statement; on failure it surfaces duckdb_prepare_error (or the
-// last host exception) and still destroys the statement.
-func (c *conn) PrepareContext(_ context.Context, query string) (st driver.Stmt, err error) {
+// last host exception) and still destroys the statement. Cancelling ctx
+// interrupts a runaway bind/optimize (the optimizer polls the interrupt flag).
+func (c *conn) PrepareContext(ctx context.Context, query string) (st driver.Stmt, err error) {
 	defer guardEnginePanic(&err)
+	if cerr := ctx.Err(); cerr != nil {
+		return nil, cerr
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.prepareLocked(query)
+	defer c.mod.armInterrupt(ctx, c.intr)()
+	st, err = c.prepareLocked(query)
+	return st, ctxErr(ctx, err)
 }
 
 // prepareLocked compiles query. Callers must hold c.mu.
@@ -311,9 +324,18 @@ func forEachStatement(query string, fn func(stmt string)) {
 // run natively falls back to direct duckdb_query execution (see execRawLocked).
 func (c *conn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (res driver.Result, err error) {
 	defer guardEnginePanic(&err)
+	if cerr := ctx.Err(); cerr != nil {
+		return nil, cerr
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.execLocked(query, args)
+	// Armed for the whole locked region: a ctx cancellation interrupts the
+	// running statement (and the post-failure recovery ROLLBACK) promptly
+	// instead of waiting for the statement boundary. Disarm (the deferred
+	// call) runs BEFORE the unlock, so no stray interrupt outlives the lock.
+	defer c.mod.armInterrupt(ctx, c.intr)()
+	res, err = c.execLocked(query, args)
+	return res, ctxErr(ctx, err)
 }
 
 // execLocked is the shared Exec path (ExecContext, simpleExec). ARGUMENT-LESS
@@ -366,19 +388,25 @@ func (c *conn) execRawLocked(query string) (driver.Result, error) {
 // Close.
 func (c *conn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (rws driver.Rows, err error) {
 	defer guardEnginePanic(&err)
+	if cerr := ctx.Err(); cerr != nil {
+		return nil, cerr
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// See ExecContext: ctx cancellation interrupts the running statement.
+	defer c.mod.armInterrupt(ctx, c.intr)()
 	if len(args) == 0 {
-		return c.queryRawRowsLocked(query)
+		rws, err = c.queryRawRowsLocked(query)
+		return rws, ctxErr(ctx, err)
 	}
 	st, err := c.prepareLocked(query)
 	if err != nil {
-		return nil, err
+		return nil, ctxErr(ctx, err)
 	}
 	rows, err := st.queryLocked(args)
 	if err != nil {
 		st.closeLocked()
-		return nil, err
+		return nil, ctxErr(ctx, err)
 	}
 	return &stmtRows{Rows: rows, st: st, c: c}, nil
 }
@@ -526,12 +554,18 @@ func (s *stmt) Exec(args []driver.Value) (driver.Result, error) {
 	return s.ExecContext(context.Background(), valuesToNamed(args))
 }
 
-// ExecContext implements driver.StmtExecContext.
-func (s *stmt) ExecContext(_ context.Context, args []driver.NamedValue) (res driver.Result, err error) {
+// ExecContext implements driver.StmtExecContext. Cancelling ctx interrupts a
+// running execute (see conn.ExecContext).
+func (s *stmt) ExecContext(ctx context.Context, args []driver.NamedValue) (res driver.Result, err error) {
 	defer guardEnginePanic(&err)
+	if cerr := ctx.Err(); cerr != nil {
+		return nil, cerr
+	}
 	s.c.mu.Lock()
 	defer s.c.mu.Unlock()
-	return s.execLocked(args)
+	defer s.c.mod.armInterrupt(ctx, s.c.intr)()
+	res, err = s.execLocked(args)
+	return res, ctxErr(ctx, err)
 }
 
 // Query implements driver.Stmt.
@@ -539,12 +573,18 @@ func (s *stmt) Query(args []driver.Value) (driver.Rows, error) {
 	return s.QueryContext(context.Background(), valuesToNamed(args))
 }
 
-// QueryContext implements driver.StmtQueryContext.
-func (s *stmt) QueryContext(_ context.Context, args []driver.NamedValue) (rws driver.Rows, err error) {
+// QueryContext implements driver.StmtQueryContext. Cancelling ctx interrupts a
+// running execute (see conn.ExecContext).
+func (s *stmt) QueryContext(ctx context.Context, args []driver.NamedValue) (rws driver.Rows, err error) {
 	defer guardEnginePanic(&err)
+	if cerr := ctx.Err(); cerr != nil {
+		return nil, cerr
+	}
 	s.c.mu.Lock()
 	defer s.c.mu.Unlock()
-	return s.queryLocked(args)
+	defer s.c.mod.armInterrupt(ctx, s.c.intr)()
+	rws, err = s.queryLocked(args)
+	return rws, ctxErr(ctx, err)
 }
 
 // execLocked binds args, executes the statement, and returns the affected-row

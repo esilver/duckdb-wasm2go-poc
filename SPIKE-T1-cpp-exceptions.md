@@ -3,8 +3,8 @@
 Status: complete, verified (2026-06-08). This repo builds a standalone DuckDB-core wasm that
 `wasm2go` transpiles to pure Go. DuckDB's error path is C++ exceptions, so the transpiled engine
 needs a Go host that makes a C++ `catch` actually fire. Spike T1 proves that host works and is small.
-Context: the parent analysis `googlesqlite-wasm2go-spike.md` and the runbook
-`duckdb-purego-poc-runbook.md` (both in the chicory `faro-docs/design/` workspace).
+Context: the runbook `duckdb-purego-poc-runbook.md` (in this repository). The parent
+options analysis (`googlesqlite-wasm2go-spike.md`) lives in a private design-notes workspace.
 
 ## The question
 

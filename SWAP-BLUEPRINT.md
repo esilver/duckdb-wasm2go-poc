@@ -1,7 +1,7 @@
 # SWAP BLUEPRINT — `duckdbcompat`: running the GoogleSQL/BigQuery emulator on our pure-Go (CGO_ENABLED=0) DuckDB engine
 
 **Target (READ-ONLY):** `/tmp/gsx-duckdb` — `esilver/googlesqlite` branch `duckdb-backend`. Imports `github.com/duckdb/duckdb-go/v2 v2.10503.1` (go.mod:56) over libduckdb v1.5.3.
-**Engine (READ-ONLY):** `/Users/elisilver/workspace/duckdb-wasm2go-poc/converge/duckdb` — pure-Go DuckDB v1.5.3 transpiled by wasm2go; working `database/sql/driver` (driver.go/result.go/module.go) + proven scalar & aggregate UDF callback mechanism (udf_test.go, udf_agg_test.go both PASS).
+**Engine (READ-ONLY):** `converge/duckdb` (this repository) — pure-Go DuckDB v1.5.3 transpiled by wasm2go; working `database/sql/driver` (driver.go/result.go/module.go) + proven scalar & aggregate UDF callback mechanism (udf_test.go, udf_agg_test.go both PASS).
 
 > **Scope note.** This document is a blueprint synthesized from four dependency-surface catalogs. All `file:line` citations into `/tmp/gsx-duckdb` and `converge/duckdb` were spot-verified against the live trees while writing. No repo is modified by this document.
 >

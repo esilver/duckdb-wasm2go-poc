@@ -49,7 +49,7 @@ wasm runtime.
 | `wabt` (`wasm-objdump`) | 1.0.41 | `brew install wabt` |
 | cmake, python3, clang | system | for the DuckDB amalgamation |
 
-Work dir used here: `/private/tmp/duckdb-wasm2go-poc/` with `build/`, `harness/`, `bench/`.
+Work dir used here (scratch layout on the original build machine, not retained): `build/`, `harness/`, `bench/`. The validated end state of all three lives in `converge/` in this repository.
 
 ---
 
@@ -118,7 +118,7 @@ The host implements the Emscripten exception ABI in Go: `invoke_*` trampolines (
 which calls the module's exported `setThrew`), `__cxa_find_matching_catch_N` (delegates RTTI to the
 module's EXPORTED `__cxa_can_catch`/`__dynamic_cast` - NOT reimplemented in Go), begin/end_catch,
 resumeException, the tempRet0/setThrew plumbing. Reference implementation lives in
-`/private/tmp/duckdb-wasm2go-poc/harness/exhost/` (generalized from the T1 probe, 366 LOC + a
+the harness `exhost/` package (now `converge/exhost/`) (generalized from the T1 probe, 366 LOC + a
 generated `invokes.go`). Regenerate the `invoke_*` set to DuckDB's exact import list:
 
 ```sh
@@ -184,11 +184,11 @@ results.
 
 | Path | What |
 |---|---|
-| `/private/tmp/duckdb-wasm2go-poc/build/` | the standalone DuckDB-core wasm build (Stage 1) |
-| `/private/tmp/duckdb-wasm2go-poc/harness/` | the run harness: `exhost/` (exceptions), `wasishim/` (libc/WASI), `run.go`, `PLUGIN.md`, validated end to end |
-| `/private/tmp/duckdb-wasm2go-poc/bench/` | the perf benchmark (execution-model overhead) |
-| `/tmp/wasm2go-duckdb-probe/t1/cpp/host.go` | T1's original exception host (the seed for `exhost/`) |
-| `faro-docs/design/googlesqlite-wasm2go-spike.md` | the full options analysis and all probe results |
+| scratch `build/` (not retained) | the standalone DuckDB-core wasm build (Stage 1), regenerable via the pipeline below |
+| `converge/exhost/`, `converge/wasishim/` | the run harness (exceptions host, libc/WASI shim), validated end to end |
+| `converge/cmd/qbench/`, `converge/cmd/insbench/` | the perf benchmarks (execution-model overhead) |
+| `converge/exhost/` | the exception host (grown from the T1 probe) |
+| `googlesqlite-wasm2go-spike.md` (private design-notes workspace) | the full options analysis and all probe results |
 
 ---
 

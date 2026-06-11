@@ -448,7 +448,7 @@ test/sql/catalog/test_catalog_errors.test                    PASS  [20 run, 20 o
 test/sql/catalog/test_create_from_select.test                PASS  [9 run, 9 ok, 0 skip] 0.06s
 test/sql/copy/csv/relaxed_quotes.test                        PASS  [23 run, 23 ok, 0 skip] 0.25s
 test/sql/catalog/test_extension_suggestion.test              FAIL(statement error: message mismatch)  [1 run, 0 ok, 0 skip] 0.06s
-    line 9: SELECT from_json('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/json/array_of_empty_arrays.json');
+    line 9: SELECT from_json('./duckdb-src/data/json/array_of_empty_arrays.json');
     expected: Catalog Error: Scalar Function with name "from_json" is not in the catalog, but it exists in the json extension.
     actual:   Binder Error: No function matches the given name and argument types 'from_json(STRING_LITERAL)'. You might need to add explicit type casts. 	Candidate functions...
 test/sql/catalog/test_if_not_exists.test                     PASS  [9 run, 9 ok, 0 skip] 0.06s
@@ -587,7 +587,7 @@ test/sql/constraints/foreignkey/fk_20530.test                PASS  [11 run, 11 o
 test/sql/copy/csv/auto/test_header_detection.test            PASS  [42 run, 42 ok, 0 skip] 0.26s
 test/sql/aggregate/aggregates/test_count.test                PASS  [7 run, 7 ok, 0 skip] 0.07s
 test/sql/copy/csv/csv_line_too_long.test                     FAIL(statement error: message mismatch)  [3 run, 2 ok, 0 skip] 0.78s
-    line 13: COPY T1(name) from '/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/line_too_long.csv.gz' (DELIMITER ',', HEADER true , COMPRESSION gzip, ALLO...
+    line 13: COPY T1(name) from './duckdb-src/data/csv/line_too_long.csv.gz' (DELIMITER ',', HEADER true , COMPRESSION gzip, ALLO...
     expected: Maximum line size of 2000000 bytes exceeded
     actual:   Invalid Input Error: 
 test/sql/aggregate/aggregates/test_bit_or.test               FAIL(wrong result)  [14 run, 13 ok, 0 skip] 0.07s
@@ -612,11 +612,11 @@ test/sql/aggregate/distinct/issue19616.test                  FAIL(unexpected err
 test/sql/aggregate/distinct/distinct_on_nulls.test           PASS  [13 run, 13 ok, 0 skip] 0.11s
 test/sql/aggregate/distinct/grouped/string_agg.test          PASS  [10 run, 10 ok, 0 skip] 0.10s
 test/sql/copy/csv/glob/copy_csv_glob.test                    FAIL(unexpected error: IO Error: No files found that match the pattern ?)  [3 run, 2 ok, 0 skip] 0.06s
-    line 12: COPY dates FROM '/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/glob/a?/*.csv' (AUTO_DETECT 1);
-    => IO Error: No files found that match the pattern "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/glob/a?/*.csv"
+    line 12: COPY dates FROM './duckdb-src/data/csv/glob/a?/*.csv' (AUTO_DETECT 1);
+    => IO Error: No files found that match the pattern "./duckdb-src/data/csv/glob/a?/*.csv"
 test/sql/aggregate/distinct/issue2656.test                   PASS  [7 run, 7 ok, 0 skip] 0.08s
 test/sql/copy/csv/auto/test_normalize_names.test             FAIL(wrong result)  [2 run, 1 ok, 0 skip] 0.09s
-    line 8: select columns from sniff_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/test_commit_rollback.csv',  normalize_names = true)
+    line 8: select columns from sniff_csv('./duckdb-src/data/csv/test_commit_rollback.csv',  normalize_names = true)
     mismatch row 1 col 1: [NULL, NULL, NULL] <> [{'name': _commit, 'type': BIGINT}, {'name': _rollback, 'type': BIGINT}, {'name': _abort, 'type': BIGINT}]
 test/sql/copy/csv/auto/test_sniffer_empty_start_value.test   PASS  [2 run, 2 ok, 0 skip] 0.11s
 test/sql/copy/csv/auto/test_sniffer_blob.test                PASS  [7 run, 7 ok, 0 skip] 0.14s
@@ -630,17 +630,17 @@ test/sql/copy/csv/auto_glob_directory.test                   FAIL(unexpected err
     line 8: SELECT grp, COUNT(*) FROM read_csv('/var/folders/wt/11rgd3011z9dwpx3g0cyp6gw0000gn/T/sqllogic-2709834807/partitioned_glob_csv') GROUP BY ALL ORDER BY ALL
     => IO Error: No files found that match the pattern "/var/folders/wt/11rgd3011z9dwpx3g0cyp6gw0000gn/T/sqllogic-2709834807/partitioned_glob_csv"
 test/sql/copy/csv/code_cov/csv_dialect_detection.test        FAIL(statement error: message mismatch)  [4 run, 3 ok, 0 skip] 0.09s
-    line 18: SELECT * from read_csv_auto('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/no_opt.csv', delim = ';')
+    line 18: SELECT * from read_csv_auto('./duckdb-src/data/csv/no_opt.csv', delim = ';')
     expected: It was not possible to automatically detect the CSV parsing dialect
     actual:   Invalid Input Error: 
 test/sql/copy/csv/code_cov/csv_exact_buffer_size.test        PASS  [5 run, 5 ok, 0 skip] 0.12s
 test/sql/copy/csv/code_cov/csv_state_machine_invalid_utf.test FAIL(statement error: message mismatch)  [1 run, 0 ok, 0 skip] 0.08s
-    line 6: from read_csv_auto('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/test/invalid_utf.csv')
+    line 6: from read_csv_auto('./duckdb-src/data/csv/test/invalid_utf.csv')
     expected: Invalid unicode (byte sequence mismatch) detected
     actual:   Invalid Input Error: 
 test/sql/copy/csv/code_cov/csv_sniffer_header.test           PASS  [5 run, 5 ok, 0 skip] 0.21s
 test/sql/copy/csv/code_cov/csv_type_detection.test           FAIL(statement error: message mismatch)  [2 run, 1 ok, 0 skip] 0.07s
-    line 8: from read_csv_auto('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/invalid_utf8.csv', auto_detect = false, columns={'c01': 'VARCHAR'} )
+    line 8: from read_csv_auto('./duckdb-src/data/csv/invalid_utf8.csv', auto_detect = false, columns={'c01': 'VARCHAR'} )
     expected: Invalid unicode (byte sequence mismatch) detected
     actual:   Invalid Input Error: 
 test/sql/copy/csv/auto/test_timings_csv.test                 PASS  [4 run, 4 ok, 0 skip] 0.60s
@@ -651,31 +651,31 @@ test/sql/copy/csv/csv_copy_sniffer.test                      PASS  [3 run, 3 ok,
 test/sql/copy/csv/copy_to_overwrite.test                     PASS  [20 run, 20 ok, 0 skip] 0.19s
 test/sql/copy/csv/copy_disable_parallelism.test              PASS  [3 run, 3 ok, 0 skip] 0.24s
 test/sql/copy/csv/csv_decimal_separator.test                 FAIL(statement error: message mismatch)  [2 run, 1 ok, 0 skip] 0.09s
-    line 9: CREATE TABLE decimal_separators AS SELECT * FROM read_csv_auto('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/decimal_separators/decimal_sep...
+    line 9: CREATE TABLE decimal_separators AS SELECT * FROM read_csv_auto('./duckdb-src/data/csv/decimal_separators/decimal_sep...
     expected: Line: 2
     actual:   Conversion Error: 
 test/sql/copy/csv/csv_dtypes_union_by_name.test              FAIL(unexpected error: IO Error: No files found that match the pattern ?)  [11 run, 10 ok, 0 skip] 0.08s
     line 35: SELECT typeof(a), typeof(b), typeof(c) FROM  read_csv_auto('/var/folders/wt/11rgd3011z9dwpx3g0cyp6gw0000gn/T/sqllogic-3780715186/ubn*.csv', UNION_BY_NAME=TRUE, ...
     => IO Error: No files found that match the pattern "/var/folders/wt/11rgd3011z9dwpx3g0cyp6gw0000gn/T/sqllogic-3780715186/ubn*.csv"
 test/sql/copy/csv/csv_enum.test                              FAIL(wrong result)  [4 run, 3 ok, 0 skip] 0.09s
-    line 19: FROM read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/response.csv', columns={'response': 'bla'}, nullstr = 'Null');
+    line 19: FROM read_csv('./duckdb-src/data/csv/response.csv', columns={'response': 'bla'}, nullstr = 'Null');
     mismatch row 1 col 1: \0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0... <> Y
 test/sql/copy/csv/csv_enum_storage.test                      SKIP(directive: load)  [0 run, 0 ok, 0 skip] 0.00s
 test/sql/copy/csv/csv_duck_fuzz.test                         PASS  [79 run, 79 ok, 0 skip] 0.16s
 test/sql/copy/csv/csv_error_message.test                     FAIL(statement error: message mismatch)  [2 run, 1 ok, 0 skip] 0.07s
-    line 10: FROM read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/15473.csv', delim = ',', columns = {'A' : 'VARCHAR','B' : 'VARCHAR','C' : 'VARC...
+    line 10: FROM read_csv('./duckdb-src/data/csv/15473.csv', delim = ',', columns = {'A' : 'VARCHAR','B' : 'VARCHAR','C' : 'VARC...
     expected: Columns are set as: "columns = { 'A' : 'VARCHAR', 'B' : 'VARCHAR', 'C' : 'VARCHAR', 'D' : 'VARCHAR'}", and they contain: 4 columns. It does not match the number...
     actual:   Invalid Input Error: 
 test/sql/copy/csv/csv_external_access.test                   PASS  [10 run, 10 ok, 0 skip] 0.08s
 test/sql/copy/csv/csv_dtypes.test                            PASS  [10 run, 10 ok, 0 skip] 0.36s
 test/sql/copy/csv/code_cov/csv_type_refinement.test          PASS  [3 run, 3 ok, 0 skip] 0.67s
 test/sql/copy/csv/csv_hive.test                              FAIL(unexpected error: IO Error: No files found that match the pattern ?)  [3 run, 2 ok, 0 skip] 0.07s
-    line 13: SELECT id, value, parse_path(filename)[-4:] from read_csv_auto('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/hive-partitioning/simple/*/*/t...
-    => IO Error: No files found that match the pattern "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/hive-partitioning/simple/*/*/test.csv"
+    line 13: SELECT id, value, parse_path(filename)[-4:] from read_csv_auto('./duckdb-src/data/csv/hive-partitioning/simple/*/*/t...
+    => IO Error: No files found that match the pattern "./duckdb-src/data/csv/hive-partitioning/simple/*/*/test.csv"
 test/sql/copy/csv/csv_glob_fallback.test                     PASS  [3 run, 3 ok, 0 skip] 0.10s
 test/sql/copy/csv/csv_hive_filename_union.test               FAIL(unexpected error: IO Error: No files found that match the pattern ?)  [2 run, 1 ok, 0 skip] 0.06s
-    line 9: select filename.replace('\', '/').split('/')[-2] from read_csv_auto('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/hive-partitioning/simple/...
-    => IO Error: No files found that match the pattern "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/hive-partitioning/simple/*/*/test.csv"
+    line 9: select filename.replace('\', '/').split('/')[-2] from read_csv_auto('./duckdb-src/data/csv/hive-partitioning/simple/...
+    => IO Error: No files found that match the pattern "./duckdb-src/data/csv/hive-partitioning/simple/*/*/test.csv"
 test/sql/copy/csv/csv_home_directory.test                    FAIL(unexpected error: IO Error: No files found that match the pattern ?)  [5 run, 4 ok, 0 skip] 0.07s
     line 17: SELECT * FROM '~/integers.csv'
     => IO Error: No files found that match the pattern "~/integers.csv"
@@ -687,8 +687,8 @@ test/sql/copy/csv/csv_quoted_newline_incorrect.test          PASS  [3 run, 3 ok,
 test/sql/copy/csv/csv_windows_mixed_separators.test          SKIP(require windows)  [0 run, 0 ok, 0 skip] 0.00s
 test/sql/copy/csv/csv_roundtrip_single_null.test             PASS  [5 run, 5 ok, 0 skip] 0.08s
 test/sql/copy/csv/csv_names.test                             FAIL(statement error: message mismatch)  [9 run, 8 ok, 0 skip] 0.28s
-    line 50: select l_orderkey, l_partkey, l_commitdate, l_comment from read_csv_auto('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/real/lineitem_sample...
-    expected: Error when sniffing file "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/real/lineitem_sample.csv".
+    line 50: select l_orderkey, l_partkey, l_commitdate, l_comment from read_csv_auto('./duckdb-src/data/csv/real/lineitem_sample...
+    expected: Error when sniffing file "./duckdb-src/data/csv/real/lineitem_sample.csv".
     actual:   Invalid Input Error: 
 test/sql/copy/csv/csv_projection_pushdown.test               PASS  [10 run, 10 ok, 0 skip] 0.18s
 test/sql/copy/csv/duck_fuzz/test_internal_4048.test          PASS  [4 run, 4 ok, 0 skip] 0.07s
@@ -733,7 +733,7 @@ test/sql/aggregate/qualify/test_qualify_macro.test           SKIP(directive: loa
 test/sql/aggregate/distinct/test_distinct_on_columns.test    PASS  [26 run, 26 ok, 0 skip] 0.16s
 test/sql/aggregate/distinct/test_distinct_order_by.test      PASS  [9 run, 9 ok, 0 skip] 0.09s
 test/sql/copy/csv/14512.test                                 FAIL(wrong result)  [3 run, 2 ok, 0 skip] 0.10s
-    line 13: select columns FROM sniff_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/14512.csv')
+    line 13: select columns FROM sniff_csv('./duckdb-src/data/csv/14512.csv')
     mismatch row 1 col 1: [NULL, NULL] <> [{'name': ingredients, 'type': VARCHAR}, {'name': item_tax_data, 'type': VARCHAR}]
 test/sql/aggregate/distinct/grouped/combined_with_grouping.test PASS  [17 run, 17 ok, 0 skip] 0.49s
 test/sql/constraints/primarykey/test_primary_key.test        PASS  [15 run, 15 ok, 0 skip] 0.08s
@@ -783,11 +783,11 @@ test/sql/aggregate/aggregates/test_null_aggregates.test      FAIL(unexpected err
     => Out of Range Error: Overflow in subtraction of INT64 (9196517019233481682 - -9121942514766415310)!
 test/sql/aggregate/aggregates/test_aggr_string.test          PASS  [13 run, 13 ok, 0 skip] 0.10s
 test/sql/copy/csv/glob/read_csv_glob.test                    FAIL(unexpected error: IO Error: No files found that match the pattern ?)  [2 run, 1 ok, 0 skip] 0.06s
-    line 8: select typeof(#1),typeof(#2),typeof(#3),typeof(#4),typeof(#5) FROM read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/per_thread/*.csv'...
-    => IO Error: No files found that match the pattern "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/per_thread/*.csv"
+    line 8: select typeof(#1),typeof(#2),typeof(#3),typeof(#4),typeof(#5) FROM read_csv('./duckdb-src/data/csv/per_thread/*.csv'...
+    => IO Error: No files found that match the pattern "./duckdb-src/data/csv/per_thread/*.csv"
 test/sql/copy/csv/glob/test_unmatch_globs.test               FAIL(unexpected error: IO Error: No files found that match the pattern ?)  [2 run, 1 ok, 0 skip] 0.06s
-    line 8: FROM '/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/glob_dif_dialect/14166/__200*.csv';
-    => IO Error: No files found that match the pattern "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/glob_dif_dialect/14166/__200*.csv"
+    line 8: FROM './duckdb-src/data/csv/glob_dif_dialect/14166/__200*.csv';
+    => IO Error: No files found that match the pattern "./duckdb-src/data/csv/glob_dif_dialect/14166/__200*.csv"
 test/sql/aggregate/group/group_by_all.test                   PASS  [20 run, 20 ok, 0 skip] 0.12s
 test/sql/aggregate/aggregates/test_perfect_ht.test           PASS  [52 run, 52 ok, 0 skip] 0.24s
 test/sql/copy/csv/integer_exponent.test                      PASS  [2 run, 2 ok, 0 skip] 0.11s
@@ -798,7 +798,7 @@ test/sql/copy/csv/leading_zeros_autodetect.test              PASS  [9 run, 9 ok,
 test/sql/copy/csv/issue_6764.test                            PASS  [7 run, 7 ok, 0 skip] 0.16s
 test/sql/copy/csv/multidelimiter/test_options_inconsistencies.test PASS  [3 run, 3 ok, 0 skip] 0.07s
 test/sql/copy/csv/multidelimiter/test_abac.test              FAIL(statement error: message mismatch)  [9 run, 8 ok, 0 skip] 0.10s
-    line 114: COPY abac_tbl FROM '/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/multidelimiter/simple_unterminated_quote.csv' (QUOTE '"', AUTO_DETECT FALS...
+    line 114: COPY abac_tbl FROM './duckdb-src/data/csv/multidelimiter/simple_unterminated_quote.csv' (QUOTE '"', AUTO_DETECT FALS...
     expected: Line: 1
     actual:   Invalid Input Error: 
 test/sql/copy/csv/parallel/test_5566.test                    PASS  [6 run, 6 ok, 0 skip] 0.45s
@@ -812,11 +812,11 @@ test/sql/copy/csv/parallel/csv_parallel_null_option.test     FAIL(unexpected err
     line 10: pragma threads=4
     => Not implemented Error: DuckDB was compiled without threads! Setting total_threads != external_threads is not allowed.
 test/sql/copy/csv/parallel/parallel_csv_hive_partitioning.test FAIL(unexpected error: IO Error: No files found that match the pattern ?)  [3 run, 2 ok, 0 skip] 0.06s
-    line 13: select id, value, filename.replace('\', '/').split('/')[-2], filename.replace('\', '/').split('/')[-3] from read_csv_auto('/Users/elisilver/workspace/duckdb-was...
-    => IO Error: No files found that match the pattern "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/hive-partitioning/simple/*/*/test.csv"
+    line 13: select id, value, filename.replace('\', '/').split('/')[-2], filename.replace('\', '/').split('/')[-3] from read_csv_auto('./duckdb-was...
+    => IO Error: No files found that match the pattern "./duckdb-src/data/csv/hive-partitioning/simple/*/*/test.csv"
 test/sql/copy/csv/parallel/parallel_csv_union_by_name.test   FAIL(unexpected error: IO Error: No files found that match the pattern ?)  [4 run, 3 ok, 0 skip] 0.06s
-    line 15: SELECT id, value, a, part FROM read_csv_auto('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/union-by-name/part=[ab]/*',HIVE_PARTITIONING=TRU...
-    => IO Error: No files found that match the pattern "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/union-by-name/part=[ab]/*"
+    line 15: SELECT id, value, a, part FROM read_csv_auto('./duckdb-src/data/csv/union-by-name/part=[ab]/*',HIVE_PARTITIONING=TRU...
+    => IO Error: No files found that match the pattern "./duckdb-src/data/csv/union-by-name/part=[ab]/*"
 test/sql/copy/csv/parallel/test_5438.test                    PASS  [3 run, 3 ok, 0 skip] 0.07s
 test/sql/aggregate/aggregates/test_scalar_aggr.test          PASS  [10 run, 10 ok, 0 skip] 0.08s
 test/sql/copy/csv/parallel/csv_parallel_buffer_size.test     PASS  [12 run, 12 ok, 0 skip] 0.17s
@@ -848,8 +848,8 @@ test/sql/copy/csv/afl/test_fuzz_5194.test                    PASS  [3 run, 3 ok,
 test/sql/copy/csv/14874.test                                 PASS  [0 run, 0 ok, 3 skip] 0.06s
 test/sql/copy/csv/null_value_wrong_type.test                 PASS  [2 run, 2 ok, 0 skip] 0.64s
 test/sql/copy/csv/18579.test                                 FAIL(unexpected error: IO Error: No files found that match the pattern ?)  [2 run, 1 ok, 0 skip] 0.06s
-    line 8: DESCRIBE FROM read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/18579/*.csv', union_by_name = true);
-    => IO Error: No files found that match the pattern "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/18579/*.csv"
+    line 8: DESCRIBE FROM read_csv('./duckdb-src/data/csv/18579/*.csv', union_by_name = true);
+    => IO Error: No files found that match the pattern "./duckdb-src/data/csv/18579/*.csv"
 test/sql/copy/csv/17738.test                                 PASS  [5 run, 5 ok, 0 skip] 0.12s
 test/sql/copy/csv/21248.test                                 FAIL(unexpected error: IO Error: No files found that match the pattern ?)  [1 run, 0 ok, 0 skip] 0.06s
     line 5: SELECT * FROM read_csv(['data/csv/unionbyname_21248_*.csv'], union_by_name = true, ignore_errors = true, all_varchar = true);
@@ -879,7 +879,7 @@ test/sql/copy/csv/afl/test_fuzz_3977.test                    FAIL(wrong result) 
     mismatch row 1 col 1: 0 <> 88
 test/sql/copy/csv/afl/test_fuzz_4172.test                    PASS  [2 run, 2 ok, 0 skip] 0.06s
 test/sql/copy/csv/afl/test_fuzz_4234.test                    FAIL(statement error: message mismatch)  [2 run, 1 ok, 0 skip] 0.07s
-    line 8: FROM read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/afl/4234/test_fuzz_4234.csv', buffer_size=30, delim=';', header=false, null_pad...
+    line 8: FROM read_csv('./duckdb-src/data/csv/afl/4234/test_fuzz_4234.csv', buffer_size=30, delim=';', header=false, null_pad...
     expected: Maximum line size of 30 bytes exceeded
     actual:   Invalid Input Error: 
 test/sql/copy/csv/afl/test_fuzz_4086.test                    PASS  [8 run, 8 ok, 0 skip] 0.10s
@@ -887,12 +887,12 @@ test/sql/copy/csv/afl/test_fuzz_4379.test                    PASS  [2 run, 2 ok,
 test/sql/copy/csv/afl/test_fuzz_4496.test                    PASS  [6 run, 6 ok, 0 skip] 0.09s
 test/sql/copy/csv/afl/test_fuzz_4793.test                    PASS  [3 run, 3 ok, 0 skip] 0.08s
 test/sql/copy/csv/null_padding_big.test                      FAIL(statement error: message mismatch)  [6 run, 5 ok, 0 skip] 1.47s
-    line 28: SELECT COUNT(*) FROM read_csv_auto('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/nullpadding_big_mixed.csv')
-    expected: Error when sniffing file "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/nullpadding_big_mixed.csv".
+    line 28: SELECT COUNT(*) FROM read_csv_auto('./duckdb-src/data/csv/nullpadding_big_mixed.csv')
+    expected: Error when sniffing file "./duckdb-src/data/csv/nullpadding_big_mixed.csv".
     actual:   Invalid Input Error: 
 test/sql/copy/csv/parallel/test_multiple_files.test          FAIL(unexpected error: IO Error: No files found that match the pattern ?)  [3 run, 2 ok, 0 skip] 0.06s
-    line 12: select * from read_csv_auto('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/auto/glob/[0-9].csv');
-    => IO Error: No files found that match the pattern "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/auto/glob/[0-9].csv"
+    line 12: select * from read_csv_auto('./duckdb-src/data/csv/auto/glob/[0-9].csv');
+    => IO Error: No files found that match the pattern "./duckdb-src/data/csv/auto/glob/[0-9].csv"
 test/sql/copy/csv/parallel/test_7578.test                    PASS  [3 run, 3 ok, 2 skip] 0.10s
 test/sql/constraints/primarykey/test_pk_updel_local.test     PASS  [14 run, 14 ok, 0 skip] 0.07s
 test/sql/copy/csv/rejects/csv_incorrect_columns_amount_rejects.test FAIL(unexpected error: duckdb: engine panic: runtime error: slice bounds out of ran)  [2 run, 1 ok, 0 skip] 0.10s
@@ -906,14 +906,14 @@ test/sql/copy/csv/read_csv_variable.test                     FAIL(wrong result) 
     line 14: SELECT [parse_path(x)[-2:] for x in getvariable('csv_files')]
     mismatch row 1 col 1: NULL <> [[a1, a1.csv], [a2, a2.csv], [a3, b1.csv]]
 test/sql/copy/csv/recursive_csv_union_by_name.test           FAIL(unexpected error: IO Error: No files found that match the pattern ?)  [2 run, 1 ok, 0 skip] 0.06s
-    line 8: create view r AS from read_csv_auto('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/hive-partitioning/mismatching_contents/*/*.csv', UNION_BY...
-    => IO Error: No files found that match the pattern "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/hive-partitioning/mismatching_contents/*/*.csv"
+    line 8: create view r AS from read_csv_auto('./duckdb-src/data/csv/hive-partitioning/mismatching_contents/*/*.csv', UNION_BY...
+    => IO Error: No files found that match the pattern "./duckdb-src/data/csv/hive-partitioning/mismatching_contents/*/*.csv"
 test/sql/copy/csv/rejects/csv_rejects_two_tables.test        FAIL(unexpected error: IO Error: No files found that match the pattern ?)  [1 run, 0 ok, 0 skip] 0.06s
-    line 10: SELECT typeof(first(column0)), typeof(first(column1)), COUNT(*), SUM(column0), MAX(len(column1)) FROM read_csv_auto(     '/Users/elisilver/workspace/duckdb-wasm...
-    => IO Error: No files found that match the pattern "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/error/mismatch/big_bad*.csv"
+    line 10: SELECT typeof(first(column0)), typeof(first(column1)), COUNT(*), SUM(column0), MAX(len(column1)) FROM read_csv_auto(     './duckdb-wasm...
+    => IO Error: No files found that match the pattern "./duckdb-src/data/csv/error/mismatch/big_bad*.csv"
 test/sql/copy/csv/rejects/csv_rejects_auto.test              FAIL(unexpected error: IO Error: No files found that match the pattern ?)  [1 run, 0 ok, 0 skip] 0.07s
-    line 10: SELECT typeof(first(column0)), typeof(first(column1)), COUNT(*), SUM(column0), MAX(len(column1)) FROM read_csv_auto(     '/Users/elisilver/workspace/duckdb-wasm...
-    => IO Error: No files found that match the pattern "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/error/mismatch/big_bad*.csv"
+    line 10: SELECT typeof(first(column0)), typeof(first(column1)), COUNT(*), SUM(column0), MAX(len(column1)) FROM read_csv_auto(     './duckdb-wasm...
+    => IO Error: No files found that match the pattern "./duckdb-src/data/csv/error/mismatch/big_bad*.csv"
 test/sql/copy/csv/recursive_read_csv.test                    PASS  [6 run, 6 ok, 0 skip] 0.12s
 test/sql/copy/csv/auto/test_auto_greek_utf8.test             PASS  [6 run, 6 ok, 0 skip] 0.12s
 test/sql/copy/csv/auto/test_14177.test                       PASS  [2 run, 2 ok, 0 skip] 0.09s
@@ -925,14 +925,14 @@ test/sql/copy/csv/auto/test_auto_8231.test                   PASS  [4 run, 4 ok,
 test/sql/copy/csv/auto/test_auto_8649.test                   PASS  [3 run, 3 ok, 0 skip] 0.09s
 test/sql/copy/csv/7702.test                                  PASS  [3 run, 3 ok, 0 skip] 1.40s
 test/sql/copy/csv/auto/test_auto_column_type_opt.test        FAIL(statement error: message mismatch)  [7 run, 6 ok, 0 skip] 0.11s
-    line 40: select * from read_csv_auto('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/test/multi_column_string.csv',  COLUMN_TYPES=STRUCT_PACK(column3 ...
+    line 40: select * from read_csv_auto('./duckdb-src/data/csv/test/multi_column_string.csv',  COLUMN_TYPES=STRUCT_PACK(column3 ...
     expected: This type was either manually set or derived from an existing table. Select a different type to correctly parse this column.
     actual:   Conversion Error: 
 test/sql/copy/csv/auto/test_auto_8860.test                   PASS  [3 run, 3 ok, 0 skip] 0.23s
 test/sql/copy/csv/auto/test_auto_5250.test                   PASS  [3 run, 3 ok, 0 skip] 0.45s
 test/sql/copy/csv/plus_autodetect.test                       PASS  [4 run, 4 ok, 0 skip] 0.09s
 test/sql/copy/csv/auto/test_csv_auto.test                    FAIL(wrong result)  [8 run, 7 ok, 0 skip] 0.12s
-    line 52: select columns FROM sniff_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/auto/mock_duckdb_test_data.csv', ignore_errors = true);
+    line 52: select columns FROM sniff_csv('./duckdb-src/data/csv/auto/mock_duckdb_test_data.csv', ignore_errors = true);
     mismatch row 1 col 1: [NULL, NULL, NULL, NULL, NULL] <> [{'name': id, 'type': BIGINT}, {'name': name, 'type': VARCHAR}, {'name': age, 'type': BIGINT}, {'name': sex, 'type': VARCHAR}, {'name': state, 'type': VARCHAR}]
 test/sql/copy/csv/auto/test_auto_greek_ncvoter.test          PASS  [8 run, 8 ok, 0 skip] 0.30s
 test/sql/copy/csv/auto/test_auto_lineitem.test               PASS  [9 run, 9 ok, 0 skip] 0.15s
@@ -940,8 +940,8 @@ test/sql/copy/csv/auto/test_auto_imdb.test                   PASS  [5 run, 5 ok,
 test/sql/copy/csv/auto/test_auto_5378.test                   PASS  [3 run, 3 ok, 0 skip] 0.90s
 test/sql/copy/csv/auto/test_auto_ontime.test                 PASS  [8 run, 8 ok, 0 skip] 0.30s
 test/sql/copy/csv/rejects/test_invalid_parameters.test       FAIL(unexpected error: IO Error: No files found that match the pattern ?)  [11 run, 10 ok, 0 skip] 0.06s
-    line 103: SELECT typeof(first(column0)), typeof(first(column1)), COUNT(*) FROM read_csv_auto(     '/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/error...
-    => IO Error: No files found that match the pattern "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/error/mismatch/big_bad*.csv"
+    line 103: SELECT typeof(first(column0)), typeof(first(column1)), COUNT(*) FROM read_csv_auto(     './duckdb-src/data/csv/error...
+    => IO Error: No files found that match the pattern "./duckdb-src/data/csv/error/mismatch/big_bad*.csv"
 test/sql/copy/csv/auto/test_auto_web_page.test               PASS  [6 run, 6 ok, 0 skip] 0.33s
 test/sql/copy/csv/rejects/csv_unquoted_rejects.test          FAIL(wrong result)  [2 run, 1 ok, 0 skip] 0.11s
     line 23: SELECT regexp_replace(file_path, '\\', '/', 'g'), line, column_idx, column_name, error_type, csv_line,line_byte_position, byte_position FROM reject_scans inner ...
@@ -949,7 +949,7 @@ test/sql/copy/csv/rejects/csv_unquoted_rejects.test          FAIL(wrong result) 
 test/sql/constraints/primarykey/test_pk_updel_multi_column.test PASS  [23 run, 23 ok, 0 skip] 0.09s
 test/sql/aggregate/having/test_having.test                   PASS  [13 run, 13 ok, 0 skip] 0.10s
 test/sql/copy/csv/auto/test_early_out.test                   FAIL(statement error: message mismatch)  [2 run, 1 ok, 0 skip] 0.07s
-    line 7: SELECT * FROM read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/auto/early_out_error.csv', buffer_size = 8, maximum_line_size = 8, aut...
+    line 7: SELECT * FROM read_csv('./duckdb-src/data/csv/auto/early_out_error.csv', buffer_size = 8, maximum_line_size = 8, aut...
     expected: Error when converting column "b". Could not convert string "\n" to 'INTEGER'
     actual:   Conversion Error: 
 test/sql/copy/csv/rejects/csv_rejects_read.test              FAIL(wrong result)  [2 run, 1 ok, 0 skip] 1.34s
@@ -981,17 +981,17 @@ test/sql/copy/csv/parallel/test_parallel_error_messages.test FAIL(unexpected err
     => Not implemented Error: DuckDB was compiled without threads! Setting total_threads != external_threads is not allowed.
 test/sql/constraints/foreignkey/fk_4365.test                 PASS  [3 run, 3 ok, 0 skip] 0.07s
 test/sql/copy/csv/struct_padding.test                        FAIL(wrong result)  [2 run, 1 ok, 0 skip] 0.09s
-    line 8: SELECT * FROM read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/test/struct_padding.csv', columns={'col': 'STRUCT(val VARCHAR)'}) ORDE...
+    line 8: SELECT * FROM read_csv('./duckdb-src/data/csv/test/struct_padding.csv', columns={'col': 'STRUCT(val VARCHAR)'}) ORDE...
     mismatch row 1 col 1: NULL <> {'val': ''}
 test/sql/copy/csv/test_11403.test                            PASS  [3 run, 3 ok, 0 skip] 0.09s
 test/sql/copy/csv/test_12596.test                            PASS  [4 run, 4 ok, 0 skip] 0.10s
 test/sql/copy/csv/test_11840.test                            PASS  [3 run, 3 ok, 0 skip] 0.09s
 test/sql/copy/csv/test_15473.test                            FAIL(wrong result)  [2 run, 1 ok, 0 skip] 0.07s
-    line 8: select columns from sniff_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/15473.csv');
+    line 8: select columns from sniff_csv('./duckdb-src/data/csv/15473.csv');
     mismatch row 1 col 1: [NULL, NULL, NULL] <> [{'name': name, 'type': VARCHAR}, {'name': Date, 'type': VARCHAR}, {'name': height, 'type': BIGINT}]
 test/sql/copy/csv/test_9005.test                             FAIL(unexpected error: IO Error: No files found that match the pattern ?)  [2 run, 1 ok, 0 skip] 0.06s
-    line 11: SELECT * FROM read_csv_auto('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/bug_9005/teste*.csv',filename=true,union_by_name=True) where file...
-    => IO Error: No files found that match the pattern "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/bug_9005/teste*.csv"
+    line 11: SELECT * FROM read_csv_auto('./duckdb-src/data/csv/bug_9005/teste*.csv',filename=true,union_by_name=True) where file...
+    => IO Error: No files found that match the pattern "./duckdb-src/data/csv/bug_9005/teste*.csv"
 test/sql/copy/csv/rejects/test_mixed.test                    FAIL(wrong result)  [2 run, 1 ok, 0 skip] 1.14s
     line 58: SELECT * EXCLUDE (scan_id) FROM reject_errors ORDER BY ALL;
     mismatch row 1 col 7: \0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0... <> MISSING COLUMNS
@@ -1012,13 +1012,13 @@ test/sql/copy/csv/test_blob.test                             FAIL(wrong result) 
     mismatch row 1 col 1: \0 !"#$%&'()*+-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~ÄÅÇÉÑÖÜáàâäãåçéèêëíìîïñóòôöõúùûü†°¢£§... <> \x00\x01\x02\x03\x04\x05\x06\x07\x08\x0B\x0C\x0E\x0F\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F !\x22#$%&\x27()*+-./0123456789:;<=>?@ABCDEF...
 test/sql/copy/csv/test_bug_10273.test                        PASS  [2 run, 2 ok, 0 skip] 0.09s
 test/sql/copy/csv/test_comment_midline.test                  FAIL(statement error: message mismatch)  [4 run, 3 ok, 0 skip] 0.09s
-    line 32: from read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/comments/14648.csv',    header=false,    sep=',',    comment='#'    );
-    expected: Error when sniffing file "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/comments/14648.csv".
+    line 32: from read_csv('./duckdb-src/data/csv/comments/14648.csv',    header=false,    sep=',',    comment='#'    );
+    expected: Error when sniffing file "./duckdb-src/data/csv/comments/14648.csv".
     actual:   Invalid Input Error: 
 test/sql/copy/csv/test_column_inconsistencies.test           PASS  [11 run, 11 ok, 0 skip] 0.19s
 test/sql/copy/csv/test_copy_default.test                     PASS  [5 run, 5 ok, 0 skip] 0.39s
 test/sql/copy/csv/test_date_sniffer.test                     FAIL(wrong result)  [3 run, 2 ok, 0 skip] 0.10s
-    line 13: SELECT columns FROM sniff_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/bad_date.csv')
+    line 13: SELECT columns FROM sniff_csv('./duckdb-src/data/csv/bad_date.csv')
     mismatch row 1 col 1: [NULL, NULL, NULL] <> [{'name': date, 'type': DATE}, {'name': eventID, 'type': VARCHAR}, {'name': subplotID, 'type': VARCHAR}]
 test/sql/copy/csv/test_csv_mixed_casts.test                  PASS  [8 run, 8 ok, 0 skip] 0.09s
 test/sql/copy/csv/test_copy.test                             FAIL(statement error: message mismatch)  [11 run, 10 ok, 0 skip] 0.57s
@@ -1030,11 +1030,11 @@ test/sql/copy/csv/test_csv_projection_pushdown_glob.test     FAIL(unexpected err
     => IO Error: No files found that match the pattern "/var/folders/wt/11rgd3011z9dwpx3g0cyp6gw0000gn/T/sqllogic-3903160/projection_pushdown_f*.csv"
 test/sql/copy/csv/test_csv_no_trailing_newline.test          PASS  [4 run, 4 ok, 0 skip] 0.29s
 test/sql/copy/csv/test_csv_timestamp_tz.test                 FAIL(wrong result)  [7 run, 6 ok, 0 skip] 0.16s
-    line 59: SELECT columns FROM sniff_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/timestamp_timezone.csv')
+    line 59: SELECT columns FROM sniff_csv('./duckdb-src/data/csv/timestamp_timezone.csv')
     mismatch row 1 col 1: [NULL, NULL] <> [{'name': time, 'type': TIMESTAMP WITH TIME ZONE}, {'name': description, 'type': VARCHAR}]
 test/sql/copy/csv/test_csv_timestamp_tz_icu.test             PASS  [5 run, 5 ok, 0 skip] 0.09s
 test/sql/copy/csv/test_csv_json.test                         FAIL(statement error: message mismatch)  [2 run, 1 ok, 0 skip] 0.09s
-    line 10: FROM read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/error/json.csv', columns={'a':'JSON'})
+    line 10: FROM read_csv('./duckdb-src/data/csv/error/json.csv', columns={'a':'JSON'})
     expected: Error when converting column "a". Could not convert string "[not a json]" to 'JSON'
     actual:   Conversion Error: 
 test/sql/copy/csv/test_date.test                             PASS  [11 run, 11 ok, 0 skip] 0.16s
@@ -1043,19 +1043,19 @@ test/sql/copy/csv/test_mixed_line_endings.test               PASS  [3 run, 3 ok,
 test/sql/copy/csv/test_csv_projection_pushdown.test          PASS  [15 run, 15 ok, 0 skip] 0.54s
 test/sql/copy/csv/test_ncvoter.test                          PASS  [9 run, 9 ok, 0 skip] 0.18s
 test/sql/copy/csv/test_mismatch_schemas.test                 FAIL(statement error: message mismatch)  [3 run, 2 ok, 0 skip] 0.24s
-    line 24: SELECT * FROM read_csv(['/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/multiple_files/more_columns/file_1.csv','/Users/elisilver/workspace/d...
-    expected: Current file: /Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/multiple_files/more_columns/file_no_header.csv
+    line 24: SELECT * FROM read_csv(['./duckdb-src/data/csv/multiple_files/more_columns/file_1.csv','./d...
+    expected: Current file: ./duckdb-src/data/csv/multiple_files/more_columns/file_no_header.csv
     actual:   Invalid Error: Unknown exception in ExecutorTask::Execute
 test/sql/copy/csv/test_many_columns.test                     PASS  [3 run, 3 ok, 0 skip] 0.12s
 test/sql/copy/csv/test_insert_into_types.test                FAIL(unexpected error: IO Error: No files found that match the pattern ?)  [3 run, 2 ok, 0 skip] 0.06s
-    line 17: INSERT INTO users SELECT * FROM read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/glob/f_*.csv', ignore_errors=true, null_padding=true...
-    => IO Error: No files found that match the pattern "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/glob/f_*.csv"
+    line 17: INSERT INTO users SELECT * FROM read_csv('./duckdb-src/data/csv/glob/f_*.csv', ignore_errors=true, null_padding=true...
+    => IO Error: No files found that match the pattern "./duckdb-src/data/csv/glob/f_*.csv"
 test/sql/copy/csv/test_mixed_new_line.test                   FAIL(statement error: message mismatch)  [6 run, 5 ok, 0 skip] 0.12s
-    line 29: from read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/mixed_new_line.csv', columns = {'a':'integer', 'b':'integer', 'c':'integer'}, n...
-    expected: Error when sniffing file "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/mixed_new_line.csv".
+    line 29: from read_csv('./duckdb-src/data/csv/mixed_new_line.csv', columns = {'a':'integer', 'b':'integer', 'c':'integer'}, n...
+    expected: Error when sniffing file "./duckdb-src/data/csv/mixed_new_line.csv".
     actual:   Invalid Input Error: 
 test/sql/copy/csv/test_ignore_errors_end_of_chunk.test       FAIL(statement error: message mismatch)  [3 run, 2 ok, 0 skip] 0.07s
-    line 13: COPY integers FROM '/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/test/error_too_little_end_of_filled_chunk.csv' (HEADER, NULL_PADDING 0, AU...
+    line 13: COPY integers FROM './duckdb-src/data/csv/test/error_too_little_end_of_filled_chunk.csv' (HEADER, NULL_PADDING 0, AU...
     expected: Expected Number of Columns: 2 Found: 1
     actual:   Invalid Input Error: 
 test/sql/copy/csv/test_ignore_mid_null_line.test             PASS  [2 run, 2 ok, 0 skip] 0.07s
@@ -1066,51 +1066,51 @@ test/sql/copy/csv/test_glob_reorder_null.test                FAIL(unexpected err
     => IO Error: No files found that match the pattern "/var/folders/wt/11rgd3011z9dwpx3g0cyp6gw0000gn/T/sqllogic-1568502714/null_glob_reorder_*.csv"
 test/sql/copy/csv/test_long_line.test                        PASS  [5 run, 5 ok, 0 skip] 0.12s
 test/sql/copy/csv/test_filename_filter.test                  FAIL(unexpected error: IO Error: No files found that match the pattern ?)  [2 run, 1 ok, 0 skip] 0.06s
-    line 8: SELECT column1, column2, column3, parse_filename(filename) FROM read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/filename_filter/*.cs...
-    => IO Error: No files found that match the pattern "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/filename_filter/*.csv"
+    line 8: SELECT column1, column2, column3, parse_filename(filename) FROM read_csv('./duckdb-src/data/csv/filename_filter/*.cs...
+    => IO Error: No files found that match the pattern "./duckdb-src/data/csv/filename_filter/*.csv"
 test/sql/copy/csv/test_nfc_suite.test                        PASS  [12 run, 12 ok, 0 skip] 0.73s
 test/sql/copy/csv/test_glob_reorder_lineitem.test            SKIP(require tpch)  [0 run, 0 ok, 0 skip] 0.00s
 test/sql/copy/csv/test_force_not_null.test                   FAIL(statement error: message mismatch)  [14 run, 13 ok, 0 skip] 0.10s
-    line 76: COPY test FROM '/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/test/force_not_null_inull.csv' (FORCE_NOT_NULL (col_a), HEADER 0);
+    line 76: COPY test FROM './duckdb-src/data/csv/test/force_not_null_inull.csv' (FORCE_NOT_NULL (col_a), HEADER 0);
     expected: Error when converting column "col_a".
     actual:   Conversion Error: 
 test/sql/copy/csv/test_comment_option.test                   FAIL(statement error: message mismatch)  [20 run, 19 ok, 0 skip] 1.45s
-    line 109: select count(*) FROM '/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/comments/error.csv';
+    line 109: select count(*) FROM './duckdb-src/data/csv/comments/error.csv';
     expected: Expected Number of Columns: 2 Found: 1
     actual:   Invalid Input Error: 
 test/sql/copy/csv/test_force_quote.test                      PASS  [17 run, 17 ok, 0 skip] 0.10s
 test/sql/copy/csv/test_headers_12089.test                    FAIL(wrong result)  [2 run, 1 ok, 0 skip] 0.08s
-    line 8: select columns FROM sniff_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/headers/escaped_quote.csv');
+    line 8: select columns FROM sniff_csv('./duckdb-src/data/csv/headers/escaped_quote.csv');
     mismatch row 1 col 1: [NULL, NULL] <> [{'name': Name, 'type': VARCHAR}, {'name': 'Escaped\'\'Quote', 'type': BIGINT}]
 test/sql/copy/csv/test_issue5077.test                        PASS  [4 run, 4 ok, 0 skip] 0.15s
 test/sql/copy/csv/test_lineitem.test                         PASS  [9 run, 9 ok, 0 skip] 0.11s
 test/sql/copy/csv/test_escape_long_value.test                PASS  [73 run, 73 ok, 0 skip] 0.27s
 test/sql/copy/csv/test_header_only.test                      FAIL(wrong result)  [2 run, 1 ok, 0 skip] 0.08s
-    line 8: SELECT columns from sniff_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/header_only.csv', header=True, ignore_errors=True)
+    line 8: SELECT columns from sniff_csv('./duckdb-src/data/csv/header_only.csv', header=True, ignore_errors=True)
     mismatch row 1 col 1: [NULL] <> [{'name': abs_file_name, 'type': VARCHAR}]
 test/sql/copy/csv/test_extra_delimiters_rfc.test             PASS  [2 run, 2 ok, 0 skip] 0.07s
 test/sql/copy/csv/auto/test_describe_order.test              PASS  [4 run, 4 ok, 0 skip] 3.34s
 test/sql/copy/csv/test_copy_null.test                        FAIL(statement error: message mismatch)  [16 run, 15 ok, 0 skip] 0.14s
-    line 88: COPY test_null_option FROM '/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/test/test_null_option.csv' (DELIMITER 'null', NULL 'null');
+    line 88: COPY test_null_option FROM './duckdb-src/data/csv/test/test_null_option.csv' (DELIMITER 'null', NULL 'null');
     expected: It was not possible to automatically detect the CSV parsing dialect
     actual:   Invalid Input Error: 
 test/sql/copy/csv/test_empty_quote.test                      PASS  [5 run, 5 ok, 0 skip] 0.09s
 test/sql/copy/csv/test_linesize.test                         FAIL(statement error: message mismatch)  [2 run, 1 ok, 0 skip] 0.09s
-    line 8: FROM read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/15473.csv', max_line_size = 10)
+    line 8: FROM read_csv('./duckdb-src/data/csv/15473.csv', max_line_size = 10)
     expected: Possible Solution: Change the maximum length size, e.g., max_line_size=19
     actual:   Invalid Input Error: 
 test/sql/copy/csv/test_missing_row.test                      PASS  [2 run, 2 ok, 0 skip] 0.07s
 test/sql/copy/csv/test_ignore_errors.test                    FAIL(statement error: message mismatch)  [4 run, 3 ok, 0 skip] 0.08s
-    line 14: COPY integers FROM '/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/test/error_too_little.csv' (HEADER, NULL_PADDING FALSE)
+    line 14: COPY integers FROM './duckdb-src/data/csv/test/error_too_little.csv' (HEADER, NULL_PADDING FALSE)
     expected: It was not possible to automatically detect the CSV parsing dialect
     actual:   Invalid Input Error: 
 test/sql/copy/csv/test_hits_problematic.test                 FAIL(statement error: message mismatch)  [1 run, 0 ok, 0 skip] 0.10s
-    line 5: FROM read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/hits_problematic.csv', auto_detect=false, delim=',', quote='"', escape='\', new...
+    line 5: FROM read_csv('./duckdb-src/data/csv/hits_problematic.csv', auto_detect=false, delim=',', quote='"', escape='\', new...
     expected: * Disable the parser's strict mode (strict_mode=false) to allow reading rows that do not comply with the CSV standard.
     actual:   Invalid Input Error: 
 test/sql/copy/csv/auto/test_auto_cranlogs.test               PASS  [7 run, 7 ok, 0 skip] 4.62s
 test/sql/copy/csv/test_dateformat.test                       FAIL(statement error: message mismatch)  [3 run, 2 ok, 0 skip] 0.07s
-    line 12: COPY dates FROM '/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/test/dateformat.csv' (AUTO_DETECT 0, HEADER 0)
+    line 12: COPY dates FROM './duckdb-src/data/csv/test/dateformat.csv' (AUTO_DETECT 0, HEADER 0)
     expected: Line: 1
     actual:   Conversion Error: 
 test/sql/copy/csv/test_export_force_quotes.test              FAIL(unexpected error: Invalid Input Error: Cannot prepare multiple statements at once!)  [6 run, 5 ok, 0 skip] 0.07s
@@ -1120,33 +1120,33 @@ test/sql/copy/csv/test_export_not_null.test                  FAIL(unexpected err
     line 27: IMPORT DATABASE '/var/folders/wt/11rgd3011z9dwpx3g0cyp6gw0000gn/T/sqllogic-2589282825/broken_empty_string';
     => duckdb prepare: Invalid Input Error: Cannot prepare multiple statements at once!
 test/sql/copy/csv/test_glob_type.test                        FAIL(unexpected error: IO Error: No files found that match the pattern ?)  [3 run, 2 ok, 0 skip] 0.06s
-    line 11: SELECT typeof(bar) FROM '/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/17451/*.csv' limit 1
-    => IO Error: No files found that match the pattern "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/17451/*.csv"
+    line 11: SELECT typeof(bar) FROM './duckdb-src/data/csv/17451/*.csv' limit 1
+    => IO Error: No files found that match the pattern "./duckdb-src/data/csv/17451/*.csv"
 test/sql/copy/csv/test_csv_duplicate_columns.test            SKIP(require parquet)  [0 run, 0 ok, 0 skip] 0.00s
 test/sql/copy/csv/test_enum_csv.test                         FAIL(wrong result)  [3 run, 2 ok, 0 skip] 0.70s
-    line 11: FROM read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/enum_type.csv', types=[mood])
+    line 11: FROM read_csv('./duckdb-src/data/csv/enum_type.csv', types=[mood])
     mismatch row 1 col 1: \0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0... <> sad
 test/sql/copy/csv/test_null_padding_projection.test          FAIL(statement error: message mismatch)  [2 run, 1 ok, 0 skip] 0.07s
-    line 9: from read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/nullpadding.csv',null_padding=true, columns={ 'a': 'INTEGER','b': 'INTEGER','c'...
+    line 9: from read_csv('./duckdb-src/data/csv/nullpadding.csv',null_padding=true, columns={ 'a': 'INTEGER','b': 'INTEGER','c'...
     expected: Expected Number of Columns: 4 Found: 5
     actual:   Invalid Input Error: 
 test/sql/copy/csv/test_lineitem_gz.test                      SKIP(require tpch)  [0 run, 0 ok, 0 skip] 0.00s
 test/sql/copy/csv/test_greek_utf8.test                       PASS  [8 run, 8 ok, 0 skip] 0.10s
 test/sql/copy/csv/test_copy_many_empty_lines.test            PASS  [4 run, 4 ok, 0 skip] 0.13s
 test/sql/copy/csv/test_csv_error_message_type.test           FAIL(statement error: message mismatch)  [3 run, 2 ok, 0 skip] 0.11s
-    line 16: copy venue from '/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/venue_pipe.csv'
+    line 16: copy venue from './duckdb-src/data/csv/venue_pipe.csv'
     expected: This type was either manually set or derived from an existing table. Select a different type to correctly parse this column.
     actual:   Conversion Error: 
 test/sql/copy/csv/test_empty_header.test                     PASS  [5 run, 5 ok, 0 skip] 0.11s
 test/sql/copy/csv/test_null_padding_union.test               FAIL(unexpected error: IO Error: No files found that match the pattern ?)  [3 run, 2 ok, 0 skip] 0.06s
-    line 11: create view v as SELECT a, b, c, d FROM  read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/union-by-name/null_padding/*.csv', UNION_BY...
-    => IO Error: No files found that match the pattern "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/union-by-name/null_padding/*.csv"
+    line 11: create view v as SELECT a, b, c, d FROM  read_csv('./duckdb-src/data/csv/union-by-name/null_padding/*.csv', UNION_BY...
+    => IO Error: No files found that match the pattern "./duckdb-src/data/csv/union-by-name/null_padding/*.csv"
 test/sql/copy/csv/test_decimal.test                          PASS  [11 run, 11 ok, 0 skip] 0.16s
 test/sql/copy/csv/test_prefix_suffix.test                    PASS  [4 run, 4 ok, 0 skip] 0.06s
 test/sql/copy/csv/test_issue3562_assertion.test              PASS  [3 run, 3 ok, 0 skip] 1.16s
 test/sql/copy/csv/test_partition_compression.test            SKIP(require parquet)  [0 run, 0 ok, 0 skip] 0.00s
 test/sql/copy/csv/test_parallel_nullpadding.test             FAIL(statement error: message mismatch)  [4 run, 3 ok, 0 skip] 0.09s
-    line 20: select * from read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/evil_nullpadding.csv', delim = ';', quote = '"', null_padding = True, ...
+    line 20: select * from read_csv('./duckdb-src/data/csv/evil_nullpadding.csv', delim = ';', quote = '"', null_padding = True, ...
     expected: The parallel scanner does not support null_padding in conjunction with quoted new lines. Please disable the parallel csv reader with parallel=false
     actual:   Parameter Not Allowed Error: 
 test/sql/copy/csv/test_ontime.test                           PASS  [8 run, 8 ok, 0 skip] 0.16s
@@ -1159,60 +1159,60 @@ test/sql/copy/csv/test_skip_bom.test                         PASS  [5 run, 5 ok,
 test/sql/copy/csv/test_skip_header.test                      PASS  [3 run, 3 ok, 0 skip] 0.10s
 test/sql/copy/csv/test_read_csv.test                         PASS  [20 run, 20 ok, 0 skip] 0.64s
 test/sql/copy/csv/test_sniff_csv_options.test                FAIL(statement error: message mismatch)  [2 run, 1 ok, 0 skip] 0.07s
-    line 12: FROM sniff_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/real/lineitem_sample.csv', delim = ',');
+    line 12: FROM sniff_csv('./duckdb-src/data/csv/real/lineitem_sample.csv', delim = ',');
     expected: It was not possible to automatically detect the CSV parsing dialect
     actual:   Invalid Input Error: 
 test/sql/copy/csv/test_sniffer_tab_delimiter.test            FAIL(wrong result)  [2 run, 1 ok, 0 skip] 0.09s
-    line 8: select columns from sniff_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/test_apple_financial.csv.gz', header = 1, skip=3, delim = '\t')
+    line 8: select columns from sniff_csv('./duckdb-src/data/csv/test_apple_financial.csv.gz', header = 1, skip=3, delim = '\t')
     mismatch row 1 col 1: [NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL] <> [{'name': Transaction Date, 'type': DATE}, {'name': Settlement Date, 'type': DATE}, {'name': Apple Identifier, 'type': BIGINT}, {'name': SKU, 'type': VARCHAR}, ...
 test/sql/copy/csv/test_soccer_kaggle.test                    PASS  [2 run, 2 ok, 0 skip] 0.19s
 test/sql/copy/csv/test_thijs_unquoted_file.test              FAIL(statement error: message mismatch)  [2 run, 1 ok, 0 skip] 0.07s
-    line 9: from read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/thijs_unquoted.csv', quote='"', sep='|', escape='"', columns={'a':'varchar', 'b...
+    line 9: from read_csv('./duckdb-src/data/csv/thijs_unquoted.csv', quote='"', sep='|', escape='"', columns={'a':'varchar', 'b...
     expected: * Disable the parser's strict mode (strict_mode=false) to allow reading rows that do not comply with the CSV standard.
     actual:   Invalid Input Error: 
 test/sql/copy/csv/test_sniffer_hang.test                     FAIL(statement error: message mismatch)  [2 run, 1 ok, 0 skip] 0.46s
-    line 8: FROM read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/bad_csv_file_2047.csv', sample_size = -1)
+    line 8: FROM read_csv('./duckdb-src/data/csv/bad_csv_file_2047.csv', sample_size = -1)
     expected: Error when sniffing file
     actual:   Invalid Input Error: 
 test/sql/copy/csv/test_sniff_csv.test                        FAIL(wrong result)  [7 run, 6 ok, 0 skip] 0.59s
-    line 37: FROM sniff_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/real/lineitem_sample.csv');
+    line 37: FROM sniff_csv('./duckdb-src/data/csv/real/lineitem_sample.csv');
     mismatch row 1 col 8: [NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL] <> [{'name': column00, 'type': BIGINT}, {'name': column01, 'type': BIGINT}, {'name': column02, 'type': BIGINT}, {'name': column03, 'type': BIGINT}, {'name': column...
 test/sql/copy/csv/test_time.test                             FAIL(wrong result)  [5 run, 4 ok, 0 skip] 0.11s
-    line 26: select columns from sniff_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/auto/various_time_formats.csv')
+    line 26: select columns from sniff_csv('./duckdb-src/data/csv/auto/various_time_formats.csv')
     mismatch row 1 col 1: [NULL, NULL, NULL, NULL, NULL] <> [{'name': column0, 'type': VARCHAR}, {'name': column1, 'type': VARCHAR}, {'name': column2, 'type': TIME}, {'name': column3, 'type': VARCHAR}, {'name': column4, ...
 test/sql/copy/csv/test_thousands_separator.test              FAIL(wrong result)  [22 run, 21 ok, 0 skip] 0.21s
-    line 159: select columns from sniff_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/thousands_separator/integers.csv', thousands = ',')
+    line 159: select columns from sniff_csv('./duckdb-src/data/csv/thousands_separator/integers.csv', thousands = ',')
     mismatch row 1 col 1: [NULL] <> [{'name': bigvalues, 'type': BIGINT}]
 test/sql/copy/csv/test_timestamp_offset.test                 PASS  [2 run, 2 ok, 0 skip] 0.09s
 test/sql/copy/csv/test_timestamptz_12926.test                FAIL(statement error: expected error, got success)  [2 run, 1 ok, 0 skip] 0.09s
-    line 8: FROM read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/timestamp_tz.csv', dtypes = [TIMESTAMPTZ]);
+    line 8: FROM read_csv('./duckdb-src/data/csv/timestamp_tz.csv', dtypes = [TIMESTAMPTZ]);
 test/sql/copy/csv/test_union_by_name_types.test              FAIL(unexpected error: IO Error: No files found that match the pattern ?)  [2 run, 1 ok, 0 skip] 0.06s
     line 8: SELECT typeof(#1), typeof(#2), typeof(#3), typeof(#4), typeof(#5), typeof(#6), typeof(#7), typeof(#8), typeof(#9), typeof(#10), typeof(#11), typeof(#12), typeof...
-    => IO Error: No files found that match the pattern "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/union-by-name/gabor/Post/*.csv"
+    => IO Error: No files found that match the pattern "./duckdb-src/data/csv/union-by-name/gabor/Post/*.csv"
 test/sql/copy/csv/test_double_sniffer.test                   PASS  [6 run, 6 ok, 0 skip] 1.88s
 test/sql/copy/csv/test_copy_gzip.test                        PASS  [8 run, 8 ok, 0 skip] 2.21s
 test/sql/copy/csv/test_validator.test                        FAIL(statement error: message mismatch)  [5 run, 4 ok, 0 skip] 0.11s
-    line 33: FROM read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/validator/single_column.csv', header = 0, columns = {'a': 'integer'}, auto_dete...
+    line 33: FROM read_csv('./duckdb-src/data/csv/validator/single_column.csv', header = 0, columns = {'a': 'integer'}, auto_dete...
     expected: Error when converting column "a". Could not convert string "one" to 'INTEGER'
     actual:   Conversion Error: 
 test/sql/copy/csv/test_wrong_newline_delimiter.test          FAIL(statement error: message mismatch)  [2 run, 1 ok, 0 skip] 0.09s
-    line 8: FROM read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/timestamp.csv', columns = {'a': 'BIGINT'}, new_line= '\r', strict_mode=false)
+    line 8: FROM read_csv('./duckdb-src/data/csv/timestamp.csv', columns = {'a': 'BIGINT'}, new_line= '\r', strict_mode=false)
     expected: new_line = \r (Set By User)
     actual:   Conversion Error: 
 test/sql/copy/csv/timestamp_with_tz.test                     FAIL(statement error: message mismatch)  [3 run, 2 ok, 0 skip] 0.08s
-    line 12: COPY tbl FROM '/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/timestamp_with_tz.csv' (HEADER)
+    line 12: COPY tbl FROM './duckdb-src/data/csv/timestamp_with_tz.csv' (HEADER)
     expected: Error when converting column "ts". Could not convert string "2021-05-25 04:55:03.382494 EST" to 'TIMESTAMP'
     actual:   Conversion Error: 
 test/sql/copy/csv/test_web_page.test                         PASS  [9 run, 9 ok, 0 skip] 0.19s
 test/sql/copy/csv/test_union_by_name.test                    FAIL(statement error: message mismatch)  [17 run, 16 ok, 0 skip] 0.33s
-    line 97: SELECT * FROM read_csv_auto(['/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/union-by-name/ubn1.csv', '/Users/elisilver/workspace/duckdb-wasm...
+    line 97: SELECT * FROM read_csv_auto(['./duckdb-src/data/csv/union-by-name/ubn1.csv', './duckdb-wasm...
     expected: is missing
     actual:   Invalid Error: Unknown exception in ExecutorTask::Execute
 test/sql/copy/csv/unquoted_escape/human_eval.test            SKIP(require httpfs)  [0 run, 0 ok, 0 skip] 0.00s
 test/sql/copy/csv/tsv_copy.test                              PASS  [6 run, 6 ok, 0 skip] 0.10s
 test/sql/copy/csv/unicode_filename.test                      FAIL(unexpected error: IO Error: No files found that match the pattern ?)  [3 run, 2 ok, 0 skip] 0.09s
-    line 16: SELECT * FROM '/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/*‰∏≠Êñá.csv'
-    => IO Error: No files found that match the pattern "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/*‰∏≠Êñá.csv"
+    line 16: SELECT * FROM './duckdb-src/data/csv/*‰∏≠Êñá.csv'
+    => IO Error: No files found that match the pattern "./duckdb-src/data/csv/*‰∏≠Êñá.csv"
 test/sql/copy/csv/unquoted_escape/identical.test             PASS  [2 run, 2 ok, 0 skip] 0.08s
 test/sql/copy/csv/zstd_crash.test                            SKIP(require parquet)  [0 run, 0 ok, 0 skip] 0.00s
 test/sql/copy/csv/zstd_fs.test                               SKIP(require parquet)  [0 run, 0 ok, 0 skip] 0.00s
@@ -2428,8 +2428,8 @@ test/sql/json/issues/issue18301.test                         FAIL(unexpected err
 test/sql/json/issues/issue10784.test                         PASS  [3 run, 3 ok, 0 skip] 0.07s
 test/sql/json/issues/issue10751and11152.test                 PASS  [5 run, 5 ok, 0 skip] 0.08s
 test/sql/json/issues/issue13725.test                         FAIL(unexpected error: IO Error: No files found that match the pattern ?)  [1 run, 0 ok, 0 skip] 0.06s
-    line 10: select * from read_json_objects('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/json/13725/month=*/*.json', hive_partitioning = true, format = au...
-    => IO Error: No files found that match the pattern "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/json/13725/month=*/*.json"
+    line 10: select * from read_json_objects('./duckdb-src/data/json/13725/month=*/*.json', hive_partitioning = true, format = au...
+    => IO Error: No files found that match the pattern "./duckdb-src/data/json/13725/month=*/*.json"
 test/sql/json/issues/issue16684.test                         FAIL(wrong result)  [5 run, 4 ok, 0 skip] 0.07s
     line 23: select id, typeof(id) from '/var/folders/wt/11rgd3011z9dwpx3g0cyp6gw0000gn/T/sqllogic-664070272/issue16684.json'
     mismatch row 1 col 1: -170141183460469231731687303715884105728 <> 00000000-0000-0000-0000-000000000000
@@ -2472,11 +2472,11 @@ test/sql/json/scalar/test_json_create.test                   FAIL(wrong result) 
     mismatch row 1 col 1: {'n': 42} <> {"n":42}
 test/sql/index/art/scan/test_random_uuid.test                PASS  [36 run, 36 ok, 0 skip] 4.47s
 test/sql/json/issues/issue14167.test                         FAIL(wrong result)  [1 run, 0 ok, 0 skip] 0.13s
-    line 8: select columns.v4_c6 from read_ndjson_auto('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/json/14167.json');
+    line 8: select columns.v4_c6 from read_ndjson_auto('./duckdb-src/data/json/14167.json');
     mismatch row 1 col 1: NULL <> {'statistics': {'nonNullCount': 0}}
 test/sql/json/issues/issue15601.test                         FAIL(unexpected error: IO Error: No files found that match the pattern ?)  [2 run, 1 ok, 0 skip] 0.06s
-    line 11: FROM '/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/json/15601/fragment*.json'
-    => IO Error: No files found that match the pattern "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/json/15601/fragment*.json"
+    line 11: FROM './duckdb-src/data/json/15601/fragment*.json'
+    => IO Error: No files found that match the pattern "./duckdb-src/data/json/15601/fragment*.json"
 test/sql/json/scalar/test_json_pretty.test                   PASS  [5 run, 5 ok, 0 skip] 0.06s
 test/sql/json/scalar/test_json_merge_patch.test              FAIL(wrong result)  [2 run, 1 ok, 0 skip] 0.06s
     line 11: SELECT json_merge_patch('{"a": 1}', '{"a": 2}')
@@ -2504,7 +2504,7 @@ test/sql/json/scalar/test_json_transform.test                FAIL(wrong result) 
     line 63: select json_transform('{"a": 42}', '{"a":"UBIGINT"}')
     mismatch row 1 col 1: NULL <> {'a': 42}
 test/sql/json/table/read_json_objects.test                   FAIL(wrong result)  [2 run, 1 ok, 0 skip] 0.07s
-    line 15: SELECT * FROM read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/json/example_n.ndjson', columns={'json': 'JSON'}, delim=NULL, header=0, qu...
+    line 15: SELECT * FROM read_csv('./duckdb-src/data/json/example_n.ndjson', columns={'json': 'JSON'}, delim=NULL, header=0, qu...
     mismatch row 1 col 1: {'id': 1, 'name': 'O Brother, Where Art Thou?'} <> {"id":1,"name":"O Brother, Where Art Thou?"}
 test/sql/json/scalar/test_json_valid.test                    PASS  [123 run, 123 ok, 0 skip] 0.13s
 test/sql/json/scalar/test_json_value.test                    PASS  [36 run, 36 ok, 0 skip] 0.08s
@@ -2520,11 +2520,11 @@ test/sql/json/table/multi_file_hang.test                     FAIL(unexpected err
     line 8: set threads=8
     => Not implemented Error: DuckDB was compiled without threads! Setting total_threads != external_threads is not allowed.
 test/sql/json/table/read_json_dates.test                     FAIL(wrong result)  [2 run, 1 ok, 0 skip] 0.06s
-    line 11: select * from read_json_auto('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/json/simple_timestamp.json', columns={"ts": "TIMESTAMP[]"});
+    line 11: select * from read_json_auto('./duckdb-src/data/json/simple_timestamp.json', columns={"ts": "TIMESTAMP[]"});
     mismatch row 1 col 1: [2022-06-01 06:41:58, 2021-08-21 08:26:55.5, 2009-11-15 21:58:54.636] <> ['2022-06-01 06:41:58', '2021-08-21 08:26:55.5', '2009-11-15 21:58:54.636']
 test/sql/json/test_json_sqlite.test                          PASS  [11 run, 11 ok, 0 skip] 0.07s
 test/sql/json/table/read_json_union.test                     FAIL(wrong result)  [2 run, 1 ok, 0 skip] 0.06s
-    line 10: SELECT data FROM read_ndjson('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/json/union.ndjson', columns={data: 'UNION(name VARCHAR, age INT, vet...
+    line 10: SELECT data FROM read_ndjson('./duckdb-src/data/json/union.ndjson', columns={data: 'UNION(name VARCHAR, age INT, vet...
     mismatch row 1 col 1: NULL <> Frank
 test/sql/json/test_json_empty_object.test                    SKIP(require parquet)  [0 run, 0 ok, 0 skip] 0.00s
 test/sql/json/test_json_bool.test                            PASS  [2 run, 2 ok, 0 skip] 0.06s
@@ -3137,7 +3137,7 @@ test/sql/settings/setting_collation.test                     PASS  [11 run, 11 o
 test/sql/settings/test_disabled_local_filesystem_metadata.test FAIL(statement error: expected error, got success)  [5 run, 4 ok, 0 skip] 0.06s
     line 22: SELECT * FROM duckdb_extensions();
 test/sql/settings/test_disabled_file_systems.test            FAIL(statement error: expected error, got success)  [9 run, 8 ok, 0 skip] 0.12s
-    line 37: SELECT * FROM read_csv_auto('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/auto/skip_row.csv')
+    line 37: SELECT * FROM read_csv_auto('./duckdb-src/data/csv/auto/skip_row.csv')
 test/sql/settings/test_disabled_local_filesystem_secrets.test PASS  [3 run, 3 ok, 0 skip] 0.06s
 test/sql/settings/test_external_access_metadata.test         PASS  [4 run, 4 ok, 0 skip] 0.06s
 test/sql/settings/test_external_access_secrets.test          PASS  [3 run, 3 ok, 0 skip] 0.06s
@@ -3426,7 +3426,7 @@ test/sql/storage/nested/struct_of_lists_unaligned.test       SKIP(directive: loa
 test/sql/storage/null_byte_storage.test                      SKIP(directive: load)  [0 run, 0 ok, 0 skip] 0.00s
 test/sql/storage/optimistic_write/optimistic_write_delete.test SKIP(directive: load)  [0 run, 0 ok, 0 skip] 0.00s
 test/sql/storage/compression/dict_fsst/test_dict_fsst_with_smaller_block_size.test FAIL(unexpected error: Catalog Error: Table with name ? already exists!)  [3 run, 2 ok, 0 skip] 2.37s
-    line 11: CREATE TABLE db.t AS FROM read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/rabo-anon.csv.gz', strict_mode=FALSE);
+    line 11: CREATE TABLE db.t AS FROM read_csv('./duckdb-src/data/csv/rabo-anon.csv.gz', strict_mode=FALSE);
     => Catalog Error: Table with name "t" already exists!
 test/sql/storage/temp_directory/max_swap_space_error.test    FAIL(statement error: message mismatch)  [4 run, 3 ok, 0 skip] 0.08s
     line 27: CREATE OR REPLACE TABLE t2 AS SELECT random() FROM range(1000000);
@@ -4759,8 +4759,8 @@ wall time: 1m10s
         => duckdb prepare: Invalid Input Error: Cannot prepare multiple statements at once!
   32  unexpected error: IO Error: No files found that match the pattern ?
       e.g. test/sql/copy/csv/18579.test
-        line 8: DESCRIBE FROM read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/18579/*.csv', union_by_name = true);
-        => IO Error: No files found that match the pattern "/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/18579/*.csv"
+        line 8: DESCRIBE FROM read_csv('./duckdb-src/data/csv/18579/*.csv', union_by_name = true);
+        => IO Error: No files found that match the pattern "./duckdb-src/data/csv/18579/*.csv"
       e.g. test/sql/copy/csv/21248.test
         line 5: SELECT * FROM read_csv(['data/csv/unionbyname_21248_*.csv'], union_by_name = true, ignore_errors = true, all_varchar = true);
         => IO Error: No files found that match the pattern "data/csv/unionbyname_21248_*.csv"
@@ -4787,9 +4787,9 @@ wall time: 1m10s
         expected row 1 has 4 tab-separated values, want 3 columns
    7  statement error: expected error, got success
       e.g. test/sql/copy/csv/test_timestamptz_12926.test
-        line 8: FROM read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/timestamp_tz.csv', dtypes = [TIMESTAMPTZ]);
+        line 8: FROM read_csv('./duckdb-src/data/csv/timestamp_tz.csv', dtypes = [TIMESTAMPTZ]);
       e.g. test/sql/settings/test_disabled_file_systems.test
-        line 37: SELECT * FROM read_csv_auto('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/auto/skip_row.csv')
+        line 37: SELECT * FROM read_csv_auto('./duckdb-src/data/csv/auto/skip_row.csv')
    7  unexpected error: duckdb: engine panic: runtime error: slice bounds out of ran
       e.g. test/sql/copy/csv/rejects/csv_incorrect_columns_amount_rejects.test
         line 16: SELECT * EXCLUDE (scan_id) FROM reject_errors order by all;
@@ -4848,7 +4848,7 @@ wall time: 1m10s
         => Binder Error: Casting from TIMESTAMP to TIMESTAMP WITH TIME ZONE without an explicit time zone has been disabled  - use "AT TIME ZONE ..."
    1  unexpected error: Catalog Error: Table with name ? already exists!
       e.g. test/sql/storage/compression/dict_fsst/test_dict_fsst_with_smaller_block_size.test
-        line 11: CREATE TABLE db.t AS FROM read_csv('/Users/elisilver/workspace/duckdb-wasm2go-poc/duckdb-src/data/csv/rabo-anon.csv.gz', strict_mode=FALSE);
+        line 11: CREATE TABLE db.t AS FROM read_csv('./duckdb-src/data/csv/rabo-anon.csv.gz', strict_mode=FALSE);
         => Catalog Error: Table with name "t" already exists!
    1  unexpected error: Catalog Error: Table with name T does not exist!
       e.g. test/sql/storage/wal/wal_promote_version.test

@@ -64,3 +64,49 @@ func TestDeadOnArrivalStatementSkipsEngine(t *testing.T) {
 		t.Fatalf("post-storm query: v=%d err=%v", v, err)
 	}
 }
+
+// TestDeadOnArrivalBeginSkipsEngine: BeginTx with a context that expires while
+// queued must not issue the engine BEGIN (or leave transaction state behind) —
+// otherwise every doomed request still costs two queued engine statements
+// (BEGIN + ROLLBACK) under the connection mutex.
+func TestDeadOnArrivalBeginSkipsEngine(t *testing.T) {
+	_, c := openSingleConn(t, ":memory:")
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	holderStarted := make(chan struct{})
+	go func() {
+		defer wg.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+		defer cancel()
+		close(holderStarted)
+		rows, err := c.QueryContext(ctx, runawaySQL)
+		if err == nil {
+			rows.Close()
+		}
+	}()
+	<-holderStarted
+	time.Sleep(50 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := c.BeginTx(ctx, nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("queued-dead BeginTx: want DeadlineExceeded, got %v", err)
+	}
+	wg.Wait()
+
+	// No transaction state may linger: a fresh explicit transaction must
+	// open, work, and commit on the same connection.
+	tx, err := c.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("post-storm BeginTx: %v", err)
+	}
+	var v int
+	if err := tx.QueryRowContext(context.Background(), "SELECT 11").Scan(&v); err != nil || v != 11 {
+		t.Fatalf("in-tx query: v=%d err=%v", v, err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+}

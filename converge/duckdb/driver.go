@@ -472,8 +472,25 @@ func (c *conn) Begin() (driver.Tx, error) {
 
 // BeginTx implements driver.ConnBeginTx. DuckDB transactions are unnamed and do
 // not honor isolation-level or read-only hints here, so they are ignored.
-func (c *conn) BeginTx(_ context.Context, _ driver.TxOptions) (driver.Tx, error) {
-	if err := c.simpleExec("BEGIN TRANSACTION"); err != nil {
+func (c *conn) BeginTx(ctx context.Context, _ driver.TxOptions) (driver.Tx, error) {
+	// Writer-lock fairness: a dead request must not spend two queued engine
+	// statements (BEGIN now, ROLLBACK later) under the connection mutex.
+	// database/sql never rolls back a BeginTx that errored, so skipping the
+	// BEGIN here cleanly skips the whole doomed transaction. Checked both
+	// before queueing and again after acquiring the lock, like the statement
+	// entry points.
+	if cerr := ctx.Err(); cerr != nil {
+		return nil, cerr
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if cerr := ctx.Err(); cerr != nil {
+		return nil, cerr
+	}
+	if c.closed {
+		return nil, driver.ErrBadConn
+	}
+	if _, err := c.execLocked("BEGIN TRANSACTION", nil); err != nil {
 		return nil, err
 	}
 	return &tx{c: c}, nil

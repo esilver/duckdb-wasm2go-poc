@@ -128,6 +128,117 @@ func TestContextCancelInterruptsPrepared(t *testing.T) {
 	}
 }
 
+// beginTx starts an explicit transaction on the single pinned connection and
+// rolls it back (best-effort) at test end.
+func beginTx(t *testing.T, c *sql.Conn) *sql.Tx {
+	t.Helper()
+	tx, err := c.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback() })
+	return tx
+}
+
+// TestContextCancelInterruptsTxQuery is the transaction-scoped twin of
+// TestContextCancelInterruptsRunawayQuery: a runaway statement issued THROUGH
+// sql.Tx (BEGIN already executed on the connection) must be interrupted just
+// as promptly. Regression: the watcher armed on the non-tx paths only, so a
+// 150ms-budget ctx inside a transaction ran to the statement boundary
+// (observed 26s+ in the bigquery-emulator watchdog).
+func TestContextCancelInterruptsTxQuery(t *testing.T) {
+	_, c := openSingleConn(t, ":memory:")
+	tx := beginTx(t, c)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	rows, err := tx.QueryContext(ctx, runawaySQL)
+	elapsed := time.Since(start)
+	if err == nil {
+		rows.Close()
+	}
+	wantInterrupted(t, err, context.DeadlineExceeded)
+	if elapsed > interruptBudget {
+		t.Fatalf("tx interrupt took %v (budget %v)", elapsed, interruptBudget)
+	}
+
+	// After the failed statement the transaction is invalidated; ROLLBACK must
+	// clear it and the connection must answer immediately.
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("rollback after interrupted tx statement: %v", err)
+	}
+	var v int
+	if err := c.QueryRowContext(context.Background(), "SELECT 42").Scan(&v); err != nil || v != 42 {
+		t.Fatalf("post-interrupt query: v=%d err=%v", v, err)
+	}
+}
+
+// TestContextCancelInterruptsTxExec covers tx.ExecContext (runaway CTAS inside
+// an explicit transaction, explicit cancel rather than deadline).
+func TestContextCancelInterruptsTxExec(t *testing.T) {
+	_, c := openSingleConn(t, ":memory:")
+	tx := beginTx(t, c)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		cancel()
+	}()
+	start := time.Now()
+	_, err := tx.ExecContext(ctx, "CREATE TABLE tx_runaway AS "+runawaySQL)
+	elapsed := time.Since(start)
+	wantInterrupted(t, err, context.Canceled)
+	if elapsed > interruptBudget {
+		t.Fatalf("tx interrupt took %v (budget %v)", elapsed, interruptBudget)
+	}
+
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("rollback after interrupted tx exec: %v", err)
+	}
+	var n int
+	err = c.QueryRowContext(context.Background(),
+		"SELECT count(*) FROM information_schema.tables WHERE table_name='tx_runaway'").Scan(&n)
+	if err != nil || n != 0 {
+		t.Fatalf("interrupted tx CTAS left state: n=%d err=%v", n, err)
+	}
+}
+
+// TestContextCancelInterruptsTxPrepared covers a statement prepared INSIDE the
+// transaction (tx.PrepareContext -> stmt.QueryContext).
+func TestContextCancelInterruptsTxPrepared(t *testing.T) {
+	_, c := openSingleConn(t, ":memory:")
+	tx := beginTx(t, c)
+
+	st, err := tx.PrepareContext(context.Background(),
+		"SELECT count(*) FROM range(10000000) a, range(1000000) b WHERE a.range < ?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	rows, err := st.QueryContext(ctx, int64(10000000))
+	elapsed := time.Since(start)
+	if err == nil {
+		rows.Close()
+	}
+	wantInterrupted(t, err, context.DeadlineExceeded)
+	if elapsed > interruptBudget {
+		t.Fatalf("tx-prepared interrupt took %v (budget %v)", elapsed, interruptBudget)
+	}
+
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("rollback after interrupted tx-prepared statement: %v", err)
+	}
+	var v int
+	if err := c.QueryRowContext(context.Background(), "SELECT 42").Scan(&v); err != nil || v != 42 {
+		t.Fatalf("post-interrupt query: v=%d err=%v", v, err)
+	}
+}
+
 // TestInterruptDoesNotPoisonSiblingConn: on a SHARED engine (pooled connector),
 // interrupting one connection's statement must not break a sibling connection
 // queued behind it on the engine mutex.

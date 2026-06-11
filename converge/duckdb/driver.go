@@ -194,6 +194,10 @@ func (c *conn) PrepareContext(ctx context.Context, query string) (st driver.Stmt
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// See ExecContext: dead-on-arrival statements must not reach the engine.
+	if cerr := ctx.Err(); cerr != nil {
+		return nil, cerr
+	}
 	defer c.mod.armInterrupt(ctx, c.intr)()
 	st, err = c.prepareLocked(query)
 	return st, ctxErr(ctx, err)
@@ -329,6 +333,13 @@ func (c *conn) ExecContext(ctx context.Context, query string, args []driver.Name
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// Re-check after the lock: under cancellation storms statements queue
+	// behind c.mu past their deadlines, and dispatching them anyway makes
+	// each doomed statement hold the lock for its full lifetime until the
+	// interrupt lands — starving live callers (writer-lock fairness).
+	if cerr := ctx.Err(); cerr != nil {
+		return nil, cerr
+	}
 	// Armed for the whole locked region: a ctx cancellation interrupts the
 	// running statement (and the post-failure recovery ROLLBACK) promptly
 	// instead of waiting for the statement boundary. Disarm (the deferred
@@ -393,6 +404,10 @@ func (c *conn) QueryContext(ctx context.Context, query string, args []driver.Nam
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// See ExecContext: dead-on-arrival statements must not reach the engine.
+	if cerr := ctx.Err(); cerr != nil {
+		return nil, cerr
+	}
 	// See ExecContext: ctx cancellation interrupts the running statement.
 	defer c.mod.armInterrupt(ctx, c.intr)()
 	if len(args) == 0 {
@@ -563,6 +578,11 @@ func (s *stmt) ExecContext(ctx context.Context, args []driver.NamedValue) (res d
 	}
 	s.c.mu.Lock()
 	defer s.c.mu.Unlock()
+	// See conn.ExecContext: dead-on-arrival statements must not reach the
+	// engine.
+	if cerr := ctx.Err(); cerr != nil {
+		return nil, cerr
+	}
 	defer s.c.mod.armInterrupt(ctx, s.c.intr)()
 	res, err = s.execLocked(args)
 	return res, ctxErr(ctx, err)
@@ -582,6 +602,11 @@ func (s *stmt) QueryContext(ctx context.Context, args []driver.NamedValue) (rws 
 	}
 	s.c.mu.Lock()
 	defer s.c.mu.Unlock()
+	// See conn.ExecContext: dead-on-arrival statements must not reach the
+	// engine.
+	if cerr := ctx.Err(); cerr != nil {
+		return nil, cerr
+	}
 	defer s.c.mod.armInterrupt(ctx, s.c.intr)()
 	rws, err = s.queryLocked(args)
 	return rws, ctxErr(ctx, err)

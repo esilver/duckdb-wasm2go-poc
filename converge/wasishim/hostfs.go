@@ -39,6 +39,18 @@ const (
 	hostoCreate  = 1 << 2
 	hostoTrunc   = 1 << 3
 	hostoPrivate = 1 << 4 // create 0600 (FILE_FLAGS_PRIVATE: persistent secrets)
+	hostoRdLock  = 1 << 5 // FileLockType::READ_LOCK  -> shared flock
+	hostoWrLock  = 1 << 6 // FileLockType::WRITE_LOCK -> exclusive flock
+)
+
+// Sentinel "errno" values host_open returns for lock failures, well clear of
+// every platform's real errno range (must match HOSTE_* in host_fs.cpp). The
+// wasm side translates them into native DuckDB's "Could not set lock on file"
+// IOException shape.
+const (
+	hosteLockConflict = 9000 // conflicting lock held by another engine instance
+	hosteLockRdOK     = 9001 // conflict, but a shared (read) lock would succeed
+	hosteLockNotSup   = 9002 // fs does not support locks (write-lock request)
 )
 
 // errnoOf maps a Go filesystem error to a POSIX errno (positive). Callers negate
@@ -126,6 +138,19 @@ func (s *Shim) Xhost_open(pathPtr, pathLen, flags int32) int64 {
 	if err != nil {
 		return int64(-errnoOf(err))
 	}
+	if flags&(hostoRdLock|hostoWrLock) != 0 {
+		// Native DuckDB locks the database file at open (fcntl F_SETLK,
+		// local_file_system.cpp): exclusive for read-write, shared for
+		// read-only. We use flock, whose locks belong to the open file
+		// description, so two engine instances conflict even within ONE
+		// process (fcntl record locks would silently merge there) — exactly
+		// the protection issue duckdb-go-pure#5 asks for. Released
+		// automatically when the fd closes (engine close / process exit).
+		if code := hostLockFile(f, flags&hostoWrLock != 0); code != 0 {
+			f.Close()
+			return int64(-code)
+		}
+	}
 	s.mu.Lock()
 	fd := s.hostAllocFd(f)
 	s.mu.Unlock()
@@ -199,6 +224,7 @@ func (s *Shim) Xhost_close(fd int32) int32 {
 	if f == nil {
 		return -int32(syscall.EBADF)
 	}
+	hostUnlockFile(f) // release any database-file lock (no-op on unix: flock dies with the fd)
 	if err := f.Close(); err != nil {
 		return -errnoOf(err)
 	}

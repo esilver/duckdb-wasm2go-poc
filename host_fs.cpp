@@ -88,6 +88,17 @@ enum {
 	HOSTO_CREATE = 1 << 2,  // create if missing
 	HOSTO_TRUNC = 1 << 3,   // truncate to zero on open
 	HOSTO_PRIVATE = 1 << 4, // create with 0600 (FILE_FLAGS_PRIVATE, persistent secrets)
+	HOSTO_RDLOCK = 1 << 5,  // FileLockType::READ_LOCK  -> host takes a shared flock
+	HOSTO_WRLOCK = 1 << 6,  // FileLockType::WRITE_LOCK -> host takes an exclusive flock
+};
+
+// Sentinel "errno" values host_open returns for lock failures (real errnos are
+// small; these are well clear of every platform's range). Must match the
+// hosteLock* constants in converge/wasishim/hostfs.go.
+enum {
+	HOSTE_LOCK = 9000,        // conflicting lock held (native: fcntl F_SETLK EAGAIN)
+	HOSTE_LOCK_RDOK = 9001,   // conflict, but a shared (read) lock would succeed
+	HOSTE_LOCK_NOTSUP = 9002, // file system does not support locks (write-lock case)
 };
 
 namespace duckdb {
@@ -143,8 +154,38 @@ public:
 		if (hflags == 0) {
 			hflags = HOSTO_READ;
 		}
+		// Native LocalFileSystem::OpenFileExtended takes an OS file lock right
+		// after open (fcntl F_SETLK, local_file_system.cpp): WRITE_LOCK for a
+		// read-write database file, READ_LOCK for a read-only one. Forward the
+		// lock type to the host, which takes a real flock (shared/exclusive) so
+		// a second engine instance — same process OR another process — fails the
+		// open instead of silently double-writing the file (duckdb-go-pure #5).
+		if (flags.Lock() == FileLockType::READ_LOCK) {
+			hflags |= HOSTO_RDLOCK;
+		} else if (flags.Lock() == FileLockType::WRITE_LOCK) {
+			hflags |= HOSTO_WRLOCK;
+		}
 		int64_t fd = host_open(path.c_str(), (int32_t)path.size(), hflags);
 		if (fd < 0) {
+			int err = (int)-fd;
+			if (err == HOSTE_LOCK || err == HOSTE_LOCK_RDOK || err == HOSTE_LOCK_NOTSUP) {
+				// Match native's error shape (local_file_system.cpp:451) — the
+				// file EXISTS but is locked, so this must throw even under
+				// FILE_FLAGS_NULL_IF_NOT_EXISTS (read-only opens carry it).
+				string extended_error;
+				if (err == HOSTE_LOCK_NOTSUP) {
+					extended_error = "File locks are not supported for this file system, cannot open the "
+					                 "file in read-write mode. Try opening the file in read-only mode";
+				} else {
+					extended_error = "Conflicting lock is held on the file by another DuckDB instance";
+					if (err == HOSTE_LOCK_RDOK) {
+						extended_error += ". However, you would be able to open this database in "
+						                  "read-only mode, e.g. by using the -readonly parameter in the CLI";
+					}
+				}
+				extended_error += ". See also https://duckdb.org/docs/stable/connect/concurrency";
+				throw IOException("Could not set lock on file \"%s\": %s", path, extended_error);
+			}
 			if (flags.ReturnNullIfNotExists()) {
 				return nullptr;
 			}

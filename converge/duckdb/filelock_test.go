@@ -2,6 +2,9 @@ package duckdb
 
 import (
 	"database/sql"
+	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,10 +16,14 @@ import (
 // another engine instance fails with "Could not set lock on file". The wasm
 // port used to drop that lock entirely in HostFileSystem — two engines could
 // open and double-write one file (two buffer managers + two WAL writers, silent
-// corruption). The host now takes a real flock, which also conflicts between
-// two engine instances in the SAME process (the issue's exact repro — native
-// only avoids that case via the C-API instance cache, which cannot exist across
-// separate wasm instances, so refusing is the only safe parity).
+// corruption). The host enforces the lock in two layers: a process-global
+// path registry (wasishim/hostfs_lockreg.go) refuses conflicting opens by
+// another engine instance in the SAME process on every filesystem, and a real
+// flock(2) refuses other processes. (flock alone is NOT a reliable in-process
+// guard: filesystems that emulate it with POSIX record locks — NFS/SMB/FUSE —
+// merge locks per process. Native only avoids the same-process case via the
+// C-API instance cache, which cannot exist across separate wasm instances, so
+// refusing is the only safe parity.)
 
 const lockErrShape = "Could not set lock on file"
 
@@ -63,6 +70,85 @@ func TestFileLockSecondOpenRefused(t *testing.T) {
 	// the locked-out write never landed: rows are exactly {1, 3}
 	if n != 2 || sum != 4 {
 		t.Fatalf("expected rows {1,3}, got count=%d sum=%d", n, sum)
+	}
+}
+
+// TestFileLockSymlinkAliasRefused: the in-process registry canonicalizes paths
+// (EvalSymlinks+Abs), so an alias of a held database file is refused too — and
+// usable once the holder closes.
+func TestFileLockSymlinkAliasRefused(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real.db")
+	link := filepath.Join(dir, "alias.db")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlink not supported here: %v", err)
+	}
+
+	db1, err := sql.Open("duckdb", real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db1.Exec("CREATE TABLE t (x INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+
+	db2, err := sql.Open("duckdb", link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db2.Close()
+	if _, err := db2.Exec("INSERT INTO t VALUES (2)"); err == nil {
+		t.Fatal("symlink alias of a locked database file opened silently")
+	} else if !strings.Contains(err.Error(), lockErrShape) {
+		t.Fatalf("alias open failed with the wrong error shape: %v", err)
+	}
+
+	if err := db1.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db2.Exec("INSERT INTO t VALUES (3)"); err != nil {
+		t.Fatalf("alias open after lock release failed: %v", err)
+	}
+}
+
+// TestFileLockCrossProcessRefused pins the flock(2) half of the lock: a CHILD
+// process opening the held database file must fail with the native error
+// shape. (The in-process registry cannot see other processes; this guards the
+// OS-lock layer staying wired after registry changes.) Re-execs the test
+// binary in child mode via FILELOCK_CHILD_PATH.
+func TestFileLockCrossProcessRefused(t *testing.T) {
+	if path := os.Getenv("FILELOCK_CHILD_PATH"); path != "" {
+		// child mode: report the open outcome on stdout and never fail the run
+		db, err := sql.Open("duckdb", path)
+		if err == nil {
+			_, err = db.Exec("INSERT INTO t VALUES (99)")
+			db.Close()
+		}
+		fmt.Printf("CHILD-RESULT: %v\n", err)
+		return
+	}
+
+	path := filepath.Join(t.TempDir(), "xp.db")
+	db1, err := sql.Open("duckdb", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db1.Close()
+	if _, err := db1.Exec("CREATE TABLE t (x INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestFileLockCrossProcessRefused$", "-test.v")
+	cmd.Env = append(os.Environ(), "FILELOCK_CHILD_PATH="+path)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("child run failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "CHILD-RESULT: ") {
+		t.Fatalf("child never reported a result:\n%s", out)
+	}
+	if !strings.Contains(string(out), lockErrShape) {
+		t.Fatalf("child process opened the locked database (flock layer dead):\n%s", out)
 	}
 }
 

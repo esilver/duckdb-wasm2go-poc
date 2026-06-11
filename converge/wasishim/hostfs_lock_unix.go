@@ -8,18 +8,28 @@ import (
 	"syscall"
 )
 
-// hostLockFile takes a real OS lock on an already-open file: exclusive for a
-// database opened read-write, shared for read-only — DuckDB's native
-// WRITE_LOCK/READ_LOCK semantics (local_file_system.cpp). flock(2) is used
-// instead of native's fcntl(F_SETLK) deliberately: flock locks attach to the
-// open file description, so a SECOND engine instance in the same process
-// conflicts too (POSIX record locks merge per-process and would let two
-// in-process engines double-write the file — duckdb-go-pure#5's repro is two
-// sql.DB handles in one process). Cross-process behavior matches native: the
-// second opener fails. The lock is released when the fd closes.
+// hostLockFile takes the database-file lock on an already-open file:
+// exclusive for a database opened read-write, shared for read-only — DuckDB's
+// native WRITE_LOCK/READ_LOCK semantics (local_file_system.cpp). The lock has
+// two layers:
 //
+//  1. the process-global path registry (hostfs_lockreg.go) refuses a
+//     conflicting open by another engine instance in the SAME process —
+//     deterministically, on every filesystem;
+//  2. flock(2) refuses conflicting opens by OTHER processes. flock is used
+//     instead of native's fcntl(F_SETLK) because fcntl record locks merge
+//     per-process; flock attaches to the open file description and usually
+//     conflicts in-process too, but on flock-emulating filesystems
+//     (NFS/SMB/FUSE map it onto fcntl) that in-process guarantee evaporates —
+//     which is why layer 1 exists (duckdb-go-pure#5's repro is two sql.DB
+//     handles in one process).
+//
+// Released via hostUnlockFile on close (the flock half also dies with the fd).
 // Returns 0 on success or one of the hosteLock* sentinels.
 func hostLockFile(f *os.File, exclusive bool) int32 {
+	if code := hostLockRegister(f, exclusive); code != 0 {
+		return code
+	}
 	how := syscall.LOCK_SH
 	if exclusive {
 		how = syscall.LOCK_EX
@@ -32,12 +42,17 @@ func hostLockFile(f *os.File, exclusive bool) int32 {
 		errors.Is(err, syscall.ENOSYS) {
 		// Native parity: file systems without lock support are tolerated for
 		// read locks (read-only is safe anyway) and refused for write locks.
+		// The registry entry is KEPT on the tolerated path, so the in-process
+		// guarantee survives even where the OS lock cannot.
 		if exclusive {
+			hostLockUnregister(f)
 			return hosteLockNotSup
 		}
 		return 0
 	}
-	// EWOULDBLOCK/EAGAIN (or anything else): a conflicting lock is held.
+	hostLockUnregister(f)
+	// EWOULDBLOCK/EAGAIN (or anything else): a conflicting lock is held by
+	// another process (in-process conflicts were caught by the registry).
 	if exclusive {
 		// Native appends a "you could open read-only instead" hint when a read
 		// lock would succeed; probe with LOCK_SH on the same fd (replaces the
@@ -51,6 +66,6 @@ func hostLockFile(f *os.File, exclusive bool) int32 {
 	return hosteLockConflict
 }
 
-// hostUnlockFile: flock locks die with the fd; nothing to do on unix. (The
-// !unix build keeps a path registry that needs explicit release on close.)
-func hostUnlockFile(*os.File) {}
+// hostUnlockFile releases the registry entry; the flock half dies with the fd
+// (callers close f right after).
+func hostUnlockFile(f *os.File) { hostLockUnregister(f) }

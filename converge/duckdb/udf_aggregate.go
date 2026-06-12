@@ -211,12 +211,18 @@ func (mod *module) RegisterAggregateUDF(con int32, name string, paramTypeIDs []i
 
 	// Build the duckdb_aggregate_function and wire the injected callbacks.
 	af := m.Xduckdb_create_aggregate_function()
-	m.Xduckdb_aggregate_function_set_name(af, mod.cstring(name))
+	defer destroyAggregateFunction(mod, af)
+	namePtr := mod.cstring(name)
+	m.Xduckdb_aggregate_function_set_name(af, namePtr)
+	mod.free(namePtr)
 	for _, tid := range paramTypeIDs {
 		lt := m.Xduckdb_create_logical_type(tid)
 		m.Xduckdb_aggregate_function_add_parameter(af, lt)
+		destroyLogicalType(mod, lt)
 	}
-	m.Xduckdb_aggregate_function_set_return_type(af, m.Xduckdb_create_logical_type(retTypeID))
+	retType := m.Xduckdb_create_logical_type(retTypeID)
+	m.Xduckdb_aggregate_function_set_return_type(af, retType)
+	destroyLogicalType(mod, retType)
 	// Special NULL handling: the engine feeds NULL rows to update/combine rather than
 	// short-circuiting them, matching the cgo aggregate bridge (which always sets it).
 	// The impls decide NULL semantics themselves (e.g. SUM skips, COUNT counts).

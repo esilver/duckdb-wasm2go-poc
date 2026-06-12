@@ -100,14 +100,22 @@ func (mod *module) registerScalarEx(con int32, name string, paramTypeIDs []int32
 
 	// Build + register the scalar function.
 	sf := m.Xduckdb_create_scalar_function()
+	defer destroyScalarFunction(mod, sf)
 	namePtr := mod.cstring(name)
 	m.Xduckdb_scalar_function_set_name(sf, namePtr)
+	mod.free(namePtr)
 	for _, t := range paramTypeIDs {
-		m.Xduckdb_scalar_function_add_parameter(sf, m.Xduckdb_create_logical_type(t))
+		lt := m.Xduckdb_create_logical_type(t)
+		m.Xduckdb_scalar_function_add_parameter(sf, lt)
+		destroyLogicalType(mod, lt)
 	}
-	m.Xduckdb_scalar_function_set_return_type(sf, m.Xduckdb_create_logical_type(retTypeID))
+	retType := m.Xduckdb_create_logical_type(retTypeID)
+	m.Xduckdb_scalar_function_set_return_type(sf, retType)
+	destroyLogicalType(mod, retType)
 	if varargsTypeID >= 0 {
-		m.Xduckdb_scalar_function_set_varargs(sf, m.Xduckdb_create_logical_type(varargsTypeID))
+		varargsType := m.Xduckdb_create_logical_type(varargsTypeID)
+		m.Xduckdb_scalar_function_set_varargs(sf, varargsType)
+		destroyLogicalType(mod, varargsType)
 	}
 	if specialNull {
 		m.Xduckdb_scalar_function_set_special_handling(sf)
@@ -122,12 +130,35 @@ func (mod *module) registerScalarEx(con int32, name string, paramTypeIDs []int32
 	return nil
 }
 
+func destroyHandle(mod *module, handle int32, destroy func(int32)) {
+	if handle == 0 {
+		return
+	}
+	slot := mod.allocOut(4)
+	mod.writeU32(slot, uint32(handle))
+	destroy(slot)
+	mod.free(slot)
+}
+
+func destroyScalarFunction(mod *module, fn int32) {
+	destroyHandle(mod, fn, mod.m.Xduckdb_destroy_scalar_function)
+}
+
+func destroyAggregateFunction(mod *module, fn int32) {
+	destroyHandle(mod, fn, mod.m.Xduckdb_destroy_aggregate_function)
+}
+
+func destroyAggregateFunctionSet(mod *module, set int32) {
+	destroyHandle(mod, set, mod.m.Xduckdb_destroy_aggregate_function_set)
+}
+
+func destroyTableFunction(mod *module, fn int32) {
+	destroyHandle(mod, fn, mod.m.Xduckdb_destroy_table_function)
+}
+
 // destroyLogicalType frees a duckdb_logical_type handle. duckdb_destroy_logical_type
 // takes a pointer to the handle, so the value is staged in a scratch memory slot
 // (the same pattern result.go uses for column logical types).
 func destroyLogicalType(mod *module, lt int32) {
-	slot := mod.allocOut(4)
-	mod.writeU32(slot, uint32(lt))
-	mod.m.Xduckdb_destroy_logical_type(slot)
-	mod.free(slot)
+	destroyHandle(mod, lt, mod.m.Xduckdb_destroy_logical_type)
 }

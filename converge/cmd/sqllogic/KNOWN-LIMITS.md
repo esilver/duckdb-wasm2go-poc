@@ -13,6 +13,11 @@ sqllogictest corpus.
 > the chronological fix log (2,309 → 2,489 → 2,493 → 2,502 → 2,505 → 2,513 →
 > 2,522).
 
+> **2026-06-12 rerun:** the standalone runner in this directory, using
+> `github.com/esilver/duckdb-go-pure v0.3.8`, reproduced the same baseline over
+> DuckDB v1.5.3 `test/sql/**`: 3,322 files, 2,522 PASS / 9 FAIL / 791 SKIP,
+> 47,521 records run, 47,512 passed, wall time 1m49s.
+
 **2026-06-10 corpus tail sweep #2 — all 20 remaining failures classified to
 ground truth; 10 fixed, 1 converted to an upstream-parity SKIP, 9 declared
 PERMANENT EXCLUSIONS.** Every file was re-run in isolation and compared

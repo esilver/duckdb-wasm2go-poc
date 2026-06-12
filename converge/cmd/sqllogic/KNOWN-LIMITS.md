@@ -14,7 +14,7 @@ sqllogictest corpus.
 > 2,522).
 
 > **2026-06-12 rerun:** the standalone runner in this directory, using
-> `github.com/esilver/duckdb-go-pure v0.3.10`, reproduced the same baseline over
+> `github.com/esilver/duckdb-go-pure v0.3.11`, reproduced the same baseline over
 > DuckDB v1.5.3 `test/sql/**`: 3,322 files, 2,522 PASS / 9 FAIL / 791 SKIP,
 > 47,521 records run, 47,512 passed, wall time 1m49s.
 

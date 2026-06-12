@@ -19,6 +19,7 @@ parsecheck/parsecheck
 
 # macOS cruft
 .DS_Store
+.gocache/
 
 # ---- Runnable PoC: regenerable large artifacts (rebuild via build_with_core.sh + rebuild_all.sh) ----
 # All standalone wasm variants (-Oz, -O2, gc, core_functions, wasm-opt, ...)

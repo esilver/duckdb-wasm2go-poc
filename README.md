@@ -27,27 +27,32 @@ build's 14 `search`/`objectref` failures turned out to be a routing gap in the
 emulator (the pure-Go function bodies always existed but were never wired on
 the DuckDB path); the fix applies to both backends. The 8 skips are
 proto/graph features with no assertable cases. See
-[`googlesqlite` REPRODUCE-PURE-GO.md](https://github.com/esilver/googlesqlite/blob/pure-go-duckdb-backend/REPRODUCE-PURE-GO.md).
+[`googlesqlite` REPRODUCE-PURE-GO.md](https://github.com/esilver/googlesqlite/blob/main/REPRODUCE-PURE-GO.md).
 
 ### DuckDB's own sqllogictest corpus (`duckdb-src/test/sql/**`)
 
 | Metric | Result |
 |---|---|
-| Test files | **2,522 PASS / 9 FAIL / 791 SKIP** of 3,322 — **99.6% pass rate excluding skips** (2026-06-10, every remaining failure a documented permanent exclusion) |
+| Test files | **2,522 PASS / 9 FAIL / 791 SKIP** of 3,322 — **99.6% pass rate excluding skips** (confirmed 2026-06-12; every remaining failure a documented permanent exclusion) |
 | Skips | unsupported test *directives* (`load` restart protocol, `require parquet/tpch/httpfs/...`), not engine failures |
 
 Measured with the runner committed in this repo at
 [`converge/cmd/sqllogic`](converge/cmd/sqllogic/main.go) (a Go implementation
 of DuckDB's sqllogictest dialect: query/statement records, sort modes, md5
-hashing, loops, skipif/onlyif, float epsilon comparison). The canonical
+hashing, loops, skipif/onlyif, float epsilon comparison). The runner is a
+small standalone Go module that imports the published
+[`duckdb-go-pure`](https://github.com/esilver/duckdb-go-pure) driver, so a
+fresh checkout can rerun the corpus without committing generated engine
+packages. See [`converge/cmd/sqllogic/README.md`](converge/cmd/sqllogic/README.md)
+for exact commands. The canonical
 root-cause classification of every remaining failure — error-message
 fidelity, logging parity, a handful of deep-semantics singles — is
 [`converge/cmd/sqllogic/KNOWN-LIMITS.md`](converge/cmd/sqllogic/KNOWN-LIMITS.md);
-none of the 20 is core SQL execution.
+none of the remaining failures is core SQL execution.
 
 ### Downstream: a pure-Go BigQuery emulator
 
-[`bigquery-emulator`](https://github.com/esilver/bigquery-emulator/tree/pure-go-duckdb-backend)
+[`bigquery-emulator`](https://github.com/esilver/bigquery-emulator/tree/main)
 builds **out of the box from a fresh clone** with `CGO_ENABLED=0` (one `replace`
 directive in `go.mod`, pointing `goccy/googlesqlite` at the pure-Go fork tag),
 and is acceptance-tested end-to-end with the **real `bq` CLI** against the
@@ -142,8 +147,8 @@ limit, bundling `core_functions`, `-DNDEBUG`) are written up in
 |---|---|
 | **this repo** | the engine build pipeline (emcc → wasm2go → Go), the converge host/driver workspace, the sqllogictest runner, and the engineering log |
 | [esilver/duckdb-go-pure](https://github.com/esilver/duckdb-go-pure) | **the library to use**: go-gettable pure-Go DuckDB `database/sql` driver (v0.3.x, fully-optimized engine, flag-free build), transpiled engine committed in-repo |
-| [esilver/googlesqlite](https://github.com/esilver/googlesqlite) (branch `pure-go-duckdb-backend`) | BigQuery/GoogleSQL dialect on the pure-Go engine — 986/994 conformance, plus an interactive REPL ([CLI-PURE-GO.md](https://github.com/esilver/googlesqlite/blob/pure-go-duckdb-backend/CLI-PURE-GO.md)) |
-| [esilver/bigquery-emulator](https://github.com/esilver/bigquery-emulator/tree/pure-go-duckdb-backend) | the goccy BigQuery emulator running fully pure-Go, `bq`-CLI acceptance-tested |
+| [esilver/googlesqlite](https://github.com/esilver/googlesqlite) | BigQuery/GoogleSQL dialect on the pure-Go engine — 986/994 conformance, plus an interactive REPL ([CLI-PURE-GO.md](https://github.com/esilver/googlesqlite/blob/main/CLI-PURE-GO.md)) |
+| [esilver/bigquery-emulator](https://github.com/esilver/bigquery-emulator/tree/main) | the goccy BigQuery emulator running fully pure-Go, `bq`-CLI acceptance-tested |
 
 If you just want to run SQL from Go, start at **duckdb-go-pure** — you never
 need this repo's pipeline unless you are regenerating the engine.

@@ -51,7 +51,7 @@ import (
 	"sync"
 	"time"
 
-	duckdb "duckdbconverge/duckdb"
+	duckdb "github.com/esilver/duckdb-go-pure"
 )
 
 // ---------------------------------------------------------------- records

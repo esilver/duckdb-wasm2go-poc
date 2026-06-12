@@ -748,14 +748,10 @@ func executeFile(path string) fileResult {
 		return fileResult{outcome: "SKIP", reason: "read error: " + err.Error()}
 	}
 
-	db, err := sql.Open("duckdb", ":memory:")
+	db, err := sql.Open("duckdb", ":memory:?max_memory=512MB")
 	if err != nil {
 		return fileResult{outcome: "FAIL", reason: "open", detail: err.Error()}
 	}
-	// Raise the engine's memory limit: the wasm build's auto-detected default
-	// is ~17.5 MiB, far below what the C++ test harness runs with. (Documented
-	// in the report; failures to set it are ignored.)
-	_, _ = db.Exec("SET memory_limit='512MB'")
 
 	scratch, serr := os.MkdirTemp("", "sqllogic-*")
 	if serr != nil {
@@ -766,7 +762,11 @@ func executeFile(path string) fileResult {
 	// Native-runner parity (sqllogic_test_runner.cpp Reconnect): redirect
 	// persistent secrets into the per-file scratch dir so CREATE PERSISTENT
 	// SECRET never touches the real ~/.duckdb/stored_secrets.
-	_, _ = db.Exec("SET secret_directory='" + scratch + "/test_secret_dir'")
+	secretDir := strings.ReplaceAll(filepath.Join(scratch, "test_secret_dir"), "'", "''")
+	if _, err := db.Exec("SET secret_directory='" + secretDir + "'"); err != nil {
+		_ = db.Close()
+		return fileResult{outcome: "FAIL", reason: "setup secret_directory", detail: err.Error()}
+	}
 	st := &execState{
 		db:          db,
 		conns:       map[string]*sql.Conn{},

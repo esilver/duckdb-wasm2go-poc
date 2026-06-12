@@ -346,6 +346,7 @@ func (mod *module) open(dsn string) (con int32, db int32, err error) {
 		msg := ""
 		if ep := mod.readPtr(errSlot); ep != 0 {
 			msg = mod.goString(ep)
+			mod.m.Xduckdb_free(ep)
 		}
 		if msg == "" {
 			msg = mod.lastError()

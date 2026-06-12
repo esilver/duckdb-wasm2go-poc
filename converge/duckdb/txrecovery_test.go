@@ -204,6 +204,31 @@ func TestMultiStatementExec(t *testing.T) {
 	}
 }
 
+func TestForEachStatementSkipsEscapedQuotes(t *testing.T) {
+	query := "BEGIN; SELECT 'it'';s open'; SELECT \"a\"\";b\"; ROLLBACK"
+	var got []string
+	forEachStatement(query, func(stmt string) {
+		trimmed := strings.TrimSpace(stmt)
+		if trimmed != "" {
+			got = append(got, trimmed)
+		}
+	})
+	want := []string{
+		"BEGIN",
+		"SELECT 'it'';s open'",
+		"SELECT \"a\"\";b\"",
+		"ROLLBACK",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("statement count = %d (%v); want %d (%v)", len(got), got, len(want), want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("statement[%d] = %q; want %q", i, got[i], want[i])
+		}
+	}
+}
+
 // TestMemoryLimitDefault checks fix 3: the wasm engine self-detects only
 // ~17.5MB; module.open now applies a 1GB default (DSN-overridable via
 // ?max_memory=...).

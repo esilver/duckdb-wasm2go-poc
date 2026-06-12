@@ -4,7 +4,7 @@
 set -eu
 HERE=${0:a:h}
 export PATH="$(go env GOPATH)/bin:/opt/homebrew/bin:$PATH"
-export GOTOOLCHAIN=go1.25.6 CGO_ENABLED=0
+export GOTOOLCHAIN=go1.26.2 CGO_ENABLED=0
 WASM=$HERE/duckdb_core_fn.wasm
 
 # --- transpiler pin + version gate (issue #1) -------------------------------

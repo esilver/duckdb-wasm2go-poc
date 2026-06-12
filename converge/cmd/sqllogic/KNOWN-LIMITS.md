@@ -14,7 +14,7 @@ sqllogictest corpus.
 > 2,522).
 
 > **2026-06-12 rerun:** the standalone runner in this directory, using
-> `github.com/esilver/duckdb-go-pure v0.3.8`, reproduced the same baseline over
+> `github.com/esilver/duckdb-go-pure v0.3.10`, reproduced the same baseline over
 > DuckDB v1.5.3 `test/sql/**`: 3,322 files, 2,522 PASS / 9 FAIL / 791 SKIP,
 > 47,521 records run, 47,512 passed, wall time 1m49s.
 
@@ -65,11 +65,11 @@ Runner fixes (converge/cmd/sqllogic):
   Julian/Gregorian rendering.
 - **`test_sample_too_big` — `require ram 16gb` now SKIPs (upstream parity).**
   Upstream's runner skips when `FileSystem::GetAvailableMemory()` is below
-  the requirement; our engine's ceiling is the wasm32 4 GiB address space
-  (runner caps at 512MB), so `require ram` above 4 GiB is MISSING → SKIP,
-  exactly like upstream on a small machine. (`array_large.test`, `require
-  ram 8gb`, moves PASS → SKIP for the same honest reason; it only passed at
-  512MB because its requirement is conservative.)
+  the requirement; this runner caps DuckDB at 512MB, so `require ram` above
+  that cap is MISSING → SKIP, exactly like upstream on a small machine.
+  (`array_large.test`, `require ram 8gb`, moves PASS → SKIP for the same
+  honest reason; it only passed at 512MB because its requirement is
+  conservative.)
 
 Driver fixes (converge/duckdb):
 

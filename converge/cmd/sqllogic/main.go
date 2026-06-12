@@ -573,6 +573,8 @@ var builtinExtensions = map[string]bool{"json": true, "icu": true}
 
 // requirements that are satisfied in this environment (mirrors CheckRequire in
 // sqllogic_test_runner.cpp for a darwin host, default test configuration).
+const runnerMemoryCapGB = 0.5
+
 var requirePresent = map[string]bool{
 	"notmusl": true, "notmingw": true, "notwindows": true, "longdouble": true,
 	"nothreadsan": true, "strinline": true,
@@ -611,14 +613,13 @@ func checkRequire(args []string) string {
 		return "require block_size " + strings.Join(args[1:], " ")
 	case "ram":
 		// Upstream compares the requirement against the memory available to
-		// the ENGINE (FileSystem::GetAvailableMemory). Our engine is a wasm32
-		// module: its linear memory can never exceed the 4 GiB address space
-		// (and the runner caps it at 512MB), so requirements above that are
+		// the ENGINE (FileSystem::GetAvailableMemory). This runner opens
+		// DuckDB with max_memory=512MB, so requirements above that cap are
 		// MISSING and the file skips — exactly what upstream does on a small
 		// machine.
 		if len(args) >= 2 {
-			if gb := parseRamGB(args[1]); gb > 4 {
-				return "require ram " + strings.Join(args[1:], " ") + " (wasm32 4GiB ceiling)"
+			if gb := parseRamGB(args[1]); gb > runnerMemoryCapGB {
+				return "require ram " + strings.Join(args[1:], " ") + " (runner 512MB cap)"
 			}
 		}
 		return ""

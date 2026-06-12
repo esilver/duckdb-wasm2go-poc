@@ -85,11 +85,11 @@ func (mod *module) registerScalarEx(con int32, name string, paramTypeIDs []int32
 			res, err := fn(args)
 			if err != nil {
 				// Surface the error to DuckDB; it aborts the query with this message.
-				m.Xduckdb_scalar_function_set_error(info, mod.cstring(err.Error()))
+				mod.setScalarFunctionError(info, err.Error())
 				return
 			}
 			if werr := mod.writeCell(retTypeID, output, outData, r, res); werr != nil {
-				m.Xduckdb_scalar_function_set_error(info, mod.cstring(werr.Error()))
+				mod.setScalarFunctionError(info, werr.Error())
 				return
 			}
 		}

@@ -62,11 +62,12 @@ func (d *Driver) OpenConnector(dsn string) (driver.Connector, error) {
 // what callers like the googlesqlite emulator assume). c.mu both guards lazy init
 // AND serializes all engine access (the wasm engine is single-threaded).
 type connector struct {
-	dsn  string
-	mu   sync.Mutex
-	mod  *module
-	db   int32
-	init bool
+	dsn      string
+	mu       sync.Mutex
+	mod      *module
+	db       int32
+	init     bool
+	poisoned bool
 }
 
 var (
@@ -88,6 +89,12 @@ func newConnector(dsn string) *connector {
 func (c *connector) Connect(_ context.Context) (driver.Conn, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.poisoned || (c.mod != nil && c.mod.poisoned) {
+		c.poisoned = false
+		c.init = false
+		c.mod = nil
+		c.db = 0
+	}
 	if !c.init {
 		mod := newModule()
 		con, db, err := mod.open(c.dsn)
@@ -117,7 +124,7 @@ func (c *connector) Connect(_ context.Context) (driver.Conn, error) {
 func (c *connector) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.mod != nil && c.db != 0 {
+	if c.mod != nil && c.db != 0 && !c.mod.poisoned {
 		mod := c.mod
 		dbSlot := mod.allocOut(4)
 		mod.writeU32(dbSlot, uint32(c.db))
@@ -125,6 +132,10 @@ func (c *connector) Close() error {
 		mod.free(dbSlot)
 		c.db = 0
 	}
+	c.init = false
+	c.mod = nil
+	c.db = 0
+	c.poisoned = false
 	return nil
 }
 
@@ -171,12 +182,37 @@ var (
 // their own — the connection's in-flight bookkeeping never settles and a later
 // db.Close blocks forever on closemu (observed when a UDF argument decoded to
 // nil and the UDF body panicked). The module's state after such a panic is
-// undefined, so the connection should be treated as poisoned; an error makes
-// that visible instead of hanging the pool.
-func guardEnginePanic(errp *error) {
+// undefined, so poison marks it unusable before the error reaches database/sql.
+func guardEnginePanic(errp *error, poison func()) {
 	if r := recover(); r != nil {
-		*errp = fmt.Errorf("duckdb: engine panic: %v", r)
+		if poison != nil {
+			poison()
+		}
+		*errp = fmt.Errorf("duckdb: engine panic: %v: %w", r, driver.ErrBadConn)
 	}
+}
+
+func (c *conn) guardEnginePanic(errp *error) {
+	guardEnginePanic(errp, c.poisonAfterPanic)
+}
+
+func (c *conn) poisonAfterPanic() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed = true
+	if c.mod != nil {
+		c.mod.poisoned = true
+	}
+	if c.owner != nil {
+		c.owner.poisoned = true
+		c.owner.init = false
+		c.owner.mod = nil
+		c.owner.db = 0
+	}
+}
+
+func (c *conn) badLocked() bool {
+	return c.closed || c.mod == nil || c.mod.poisoned
 }
 
 func (c *conn) Prepare(query string) (driver.Stmt, error) {
@@ -188,7 +224,7 @@ func (c *conn) Prepare(query string) (driver.Stmt, error) {
 // last host exception) and still destroys the statement. Cancelling ctx
 // interrupts a runaway bind/optimize (the optimizer polls the interrupt flag).
 func (c *conn) PrepareContext(ctx context.Context, query string) (st driver.Stmt, err error) {
-	defer guardEnginePanic(&err)
+	defer c.guardEnginePanic(&err)
 	if cerr := ctx.Err(); cerr != nil {
 		return nil, cerr
 	}
@@ -197,6 +233,9 @@ func (c *conn) PrepareContext(ctx context.Context, query string) (st driver.Stmt
 	// See ExecContext: dead-on-arrival statements must not reach the engine.
 	if cerr := ctx.Err(); cerr != nil {
 		return nil, cerr
+	}
+	if c.badLocked() {
+		return nil, driver.ErrBadConn
 	}
 	defer c.mod.armInterrupt(ctx, c.intr)()
 	st, err = c.prepareLocked(query)
@@ -251,7 +290,7 @@ func (c *conn) prepareLocked(query string) (*stmt, error) {
 // dangles the ROLLBACK fails harmlessly ("no transaction is active") and the
 // error is ignored. Callers must hold c.mu.
 func (c *conn) recoverTxLocked() {
-	if c.inTx || c.closed {
+	if c.inTx || c.badLocked() {
 		return
 	}
 	_, _ = c.mod.queryRaw(c.con, "ROLLBACK")
@@ -327,7 +366,7 @@ func forEachStatement(query string, fn func(stmt string)) {
 // destroying a one-shot statement. Argument-less text the prepared path cannot
 // run natively falls back to direct duckdb_query execution (see execRawLocked).
 func (c *conn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (res driver.Result, err error) {
-	defer guardEnginePanic(&err)
+	defer c.guardEnginePanic(&err)
 	if cerr := ctx.Err(); cerr != nil {
 		return nil, cerr
 	}
@@ -339,6 +378,9 @@ func (c *conn) ExecContext(ctx context.Context, query string, args []driver.Name
 	// interrupt lands — starving live callers (writer-lock fairness).
 	if cerr := ctx.Err(); cerr != nil {
 		return nil, cerr
+	}
+	if c.badLocked() {
+		return nil, driver.ErrBadConn
 	}
 	// Armed for the whole locked region: a ctx cancellation interrupts the
 	// running statement (and the post-failure recovery ROLLBACK) promptly
@@ -362,8 +404,9 @@ func (c *conn) execLocked(query string, args []driver.NamedValue) (driver.Result
 	if err != nil {
 		return nil, err
 	}
-	defer st.closeLocked()
-	return st.execLocked(args)
+	res, err := st.execLocked(args)
+	st.closeLocked()
+	return res, err
 }
 
 // execRawLocked runs query through duckdb_query and reports the last
@@ -398,7 +441,7 @@ func (c *conn) execRawLocked(query string) (driver.Result, error) {
 // one-shot statement; those returned Rows own the statement and close it on
 // Close.
 func (c *conn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (rws driver.Rows, err error) {
-	defer guardEnginePanic(&err)
+	defer c.guardEnginePanic(&err)
 	if cerr := ctx.Err(); cerr != nil {
 		return nil, cerr
 	}
@@ -407,6 +450,9 @@ func (c *conn) QueryContext(ctx context.Context, query string, args []driver.Nam
 	// See ExecContext: dead-on-arrival statements must not reach the engine.
 	if cerr := ctx.Err(); cerr != nil {
 		return nil, cerr
+	}
+	if c.badLocked() {
+		return nil, driver.ErrBadConn
 	}
 	// See ExecContext: ctx cancellation interrupts the running statement.
 	defer c.mod.armInterrupt(ctx, c.intr)()
@@ -448,21 +494,23 @@ func (c *conn) queryRawRowsLocked(query string) (driver.Rows, error) {
 
 // Ping implements driver.Pinger by running a trivial "SELECT 1".
 func (c *conn) Ping(ctx context.Context) error {
+	var err error
+	defer c.guardEnginePanic(&err)
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.closed {
-		return driver.ErrBadConn
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
 	}
-	st, err := c.prepareLocked("SELECT 1")
-	if err != nil {
+	if c.badLocked() {
+		err = driver.ErrBadConn
 		return err
 	}
-	defer st.closeLocked()
-	rows, err := st.queryLocked(nil)
-	if err != nil {
-		return err
-	}
-	return rows.Close()
+	defer c.mod.armInterrupt(ctx, c.intr)()
+	_, err = c.mod.queryRaw(c.con, "SELECT 1")
+	return err
 }
 
 // Begin implements driver.Conn.
@@ -470,9 +518,9 @@ func (c *conn) Begin() (driver.Tx, error) {
 	return c.BeginTx(context.Background(), driver.TxOptions{})
 }
 
-// BeginTx implements driver.ConnBeginTx. DuckDB transactions are unnamed and do
-// not honor isolation-level or read-only hints here, so they are ignored.
-func (c *conn) BeginTx(ctx context.Context, _ driver.TxOptions) (driver.Tx, error) {
+// BeginTx implements driver.ConnBeginTx. DuckDB transactions are unnamed; this
+// driver rejects transaction options it cannot enforce.
+func (c *conn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
 	// Writer-lock fairness: a dead request must not spend two queued engine
 	// statements (BEGIN now, ROLLBACK later) under the connection mutex.
 	// database/sql never rolls back a BeginTx that errored, so skipping the
@@ -482,12 +530,18 @@ func (c *conn) BeginTx(ctx context.Context, _ driver.TxOptions) (driver.Tx, erro
 	if cerr := ctx.Err(); cerr != nil {
 		return nil, cerr
 	}
+	if opts.ReadOnly {
+		return nil, errors.New("duckdb: read-only transactions are not supported")
+	}
+	if opts.Isolation != driver.IsolationLevel(sql.LevelDefault) {
+		return nil, fmt.Errorf("duckdb: unsupported isolation level %d", opts.Isolation)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if cerr := ctx.Err(); cerr != nil {
 		return nil, cerr
 	}
-	if c.closed {
+	if c.badLocked() {
 		return nil, driver.ErrBadConn
 	}
 	if _, err := c.execLocked("BEGIN TRANSACTION", nil); err != nil {
@@ -501,7 +555,7 @@ func (c *conn) BeginTx(ctx context.Context, _ driver.TxOptions) (driver.Tx, erro
 func (c *conn) simpleExec(query string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.closed {
+	if c.badLocked() {
 		return driver.ErrBadConn
 	}
 	_, err := c.execLocked(query, nil)
@@ -519,6 +573,9 @@ func (c *conn) Close() error {
 	}
 	c.closed = true
 	mod := c.mod
+	if mod == nil || mod.poisoned {
+		return nil
+	}
 
 	conSlot := mod.allocOut(4)
 	mod.writeU32(conSlot, uint32(c.con))
@@ -565,6 +622,10 @@ func (s *stmt) closeLocked() {
 		return
 	}
 	s.closed = true
+	if s.c.badLocked() {
+		s.handle = 0
+		return
+	}
 	if s.handle != 0 {
 		destroyPrepare(s.c.mod, s.handle)
 		s.handle = 0
@@ -575,7 +636,7 @@ func (s *stmt) closeLocked() {
 func (s *stmt) NumInput() int {
 	s.c.mu.Lock()
 	defer s.c.mu.Unlock()
-	if s.closed || s.handle == 0 {
+	if s.closed || s.handle == 0 || s.c.badLocked() {
 		return -1
 	}
 	return int(s.c.mod.m.Xduckdb_nparams(s.handle))
@@ -589,7 +650,7 @@ func (s *stmt) Exec(args []driver.Value) (driver.Result, error) {
 // ExecContext implements driver.StmtExecContext. Cancelling ctx interrupts a
 // running execute (see conn.ExecContext).
 func (s *stmt) ExecContext(ctx context.Context, args []driver.NamedValue) (res driver.Result, err error) {
-	defer guardEnginePanic(&err)
+	defer s.c.guardEnginePanic(&err)
 	if cerr := ctx.Err(); cerr != nil {
 		return nil, cerr
 	}
@@ -599,6 +660,9 @@ func (s *stmt) ExecContext(ctx context.Context, args []driver.NamedValue) (res d
 	// engine.
 	if cerr := ctx.Err(); cerr != nil {
 		return nil, cerr
+	}
+	if s.c.badLocked() {
+		return nil, driver.ErrBadConn
 	}
 	defer s.c.mod.armInterrupt(ctx, s.c.intr)()
 	res, err = s.execLocked(args)
@@ -613,7 +677,7 @@ func (s *stmt) Query(args []driver.Value) (driver.Rows, error) {
 // QueryContext implements driver.StmtQueryContext. Cancelling ctx interrupts a
 // running execute (see conn.ExecContext).
 func (s *stmt) QueryContext(ctx context.Context, args []driver.NamedValue) (rws driver.Rows, err error) {
-	defer guardEnginePanic(&err)
+	defer s.c.guardEnginePanic(&err)
 	if cerr := ctx.Err(); cerr != nil {
 		return nil, cerr
 	}
@@ -623,6 +687,9 @@ func (s *stmt) QueryContext(ctx context.Context, args []driver.NamedValue) (rws 
 	// engine.
 	if cerr := ctx.Err(); cerr != nil {
 		return nil, cerr
+	}
+	if s.c.badLocked() {
+		return nil, driver.ErrBadConn
 	}
 	defer s.c.mod.armInterrupt(ctx, s.c.intr)()
 	rws, err = s.queryLocked(args)

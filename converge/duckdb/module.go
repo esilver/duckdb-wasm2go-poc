@@ -44,8 +44,8 @@ func (a modABI) IncrementExceptionRefcount(exc int32) {
 func (a modABI) DecrementExceptionRefcount(exc int32) {
 	a.m.X__cxa_decrement_exception_refcount(exc)
 }
-func (a modABI) Malloc(n int32) int32                                  { return a.m.Xmalloc(n) }
-func (a modABI) Free(ptr int32)                                        { a.m.Xfree(ptr) }
+func (a modABI) Malloc(n int32) int32 { return a.m.Xmalloc(n) }
+func (a modABI) Free(ptr int32)       { a.m.Xfree(ptr) }
 func (a modABI) ReadU32(ptr int32) int32 {
 	mem := *a.m.Xmemory().Slice()
 	return int32(binary.LittleEndian.Uint32(mem[ptr:]))
@@ -94,6 +94,9 @@ type module struct {
 	// pooled/connector path shares the connector's mutex instead. The wasm engine
 	// is single-threaded, so exactly one of these guards every C-API call.
 	mu sync.Mutex
+	// poisoned is set after a panic escapes the transpiled engine. At that point
+	// engine state is not trustworthy; callers must not re-enter it.
+	poisoned bool
 	// pins keeps Go UDF callback closures alive for the module's lifetime: they
 	// live in the engine's indirect-function table (which roots them too), but an
 	// explicit pin documents intent and survives any table reallocation. Indices
@@ -274,26 +277,71 @@ func parseDSN(dsn string) (path, maxMemory string) {
 // option, so SQL on the first connection configures the whole database).
 func (mod *module) open(dsn string) (con int32, db int32, err error) {
 	path, maxMemory := parseDSN(dsn)
+	var (
+		cfgSlot  int32
+		cfg      int32
+		pathPtr  int32
+		dbSlot   int32
+		errSlot  int32
+		conSlot  int32
+		dbOpened bool
+	)
+	defer func() {
+		if err != nil {
+			if con != 0 {
+				slot := mod.allocOut(4)
+				mod.writeU32(slot, uint32(con))
+				mod.m.Xduckdb_disconnect(slot)
+				mod.free(slot)
+				con = 0
+			}
+			if dbOpened && db != 0 {
+				slot := mod.allocOut(4)
+				mod.writeU32(slot, uint32(db))
+				mod.m.Xduckdb_close(slot)
+				mod.free(slot)
+				db = 0
+			}
+		}
+		if cfgSlot != 0 {
+			if cfg != 0 {
+				mod.m.Xduckdb_destroy_config(cfgSlot)
+			}
+			mod.free(cfgSlot)
+		}
+		if pathPtr != 0 {
+			mod.free(pathPtr)
+		}
+		if dbSlot != 0 {
+			mod.free(dbSlot)
+		}
+		if errSlot != 0 {
+			mod.free(errSlot)
+		}
+		if conSlot != 0 {
+			mod.free(conSlot)
+		}
+	}()
+
 	// Install the Tier-2 host filesystem on a DBConfig BEFORE open (the database
 	// file is opened DURING duckdb_open_ext using config.file_system; a post-open
 	// hook is too late). Without this, the instance falls back to DuckDB's local
 	// FS, whose directory syscalls are ENOSYS under wasm — file-backed DBs can't
 	// persist and even :memory: DBs fail when the engine spills (the temp
 	// directory is created through the instance's filesystem).
-	cfgSlot := mod.allocOut(4)
+	cfgSlot = mod.allocOut(4)
 	if rc := mod.m.Xduckdb_create_config(cfgSlot); rc != 0 {
-		mod.free(cfgSlot)
 		return 0, 0, fmt.Errorf("duckdb_create_config: %s", orUnknown(mod.lastError()))
 	}
-	cfg := mod.readPtr(cfgSlot)
+	cfg = mod.readPtr(cfgSlot)
 	mod.m.Xhost_fs_attach_to_config(cfg)
 
-	pathPtr := mod.cstring(path)
-	dbSlot := mod.allocOut(4)
-	errSlot := mod.allocOut(4) // char** out-param for the open error string
+	pathPtr = mod.cstring(path)
+	dbSlot = mod.allocOut(4)
+	errSlot = mod.allocOut(4) // char** out-param for the open error string
 	rc := mod.m.Xduckdb_open_ext(pathPtr, dbSlot, cfg, errSlot)
 	mod.m.Xduckdb_destroy_config(cfgSlot) // open_ext moved file_system out; free the shell
-	mod.free(cfgSlot)
+	cfg = 0
 	if rc != 0 {
 		msg := ""
 		if ep := mod.readPtr(errSlot); ep != 0 {
@@ -302,22 +350,17 @@ func (mod *module) open(dsn string) (con int32, db int32, err error) {
 		if msg == "" {
 			msg = mod.lastError()
 		}
-		mod.free(errSlot)
 		return 0, 0, fmt.Errorf("duckdb_open_ext(%q): %s", path, orUnknown(msg))
 	}
-	mod.free(errSlot)
 	db = mod.readPtr(dbSlot)
+	dbOpened = true
 	mod.m.Xregister_core_functions(db) // core-only amalgamation: register sum/avg/strings
 
-	conSlot := mod.allocOut(4)
+	conSlot = mod.allocOut(4)
 	if rc := mod.m.Xduckdb_connect(db, conSlot); rc != 0 {
 		return 0, 0, fmt.Errorf("duckdb_connect: %s", orUnknown(mod.lastError()))
 	}
 	con = mod.readPtr(conSlot)
-
-	mod.free(pathPtr)
-	mod.free(dbSlot)
-	mod.free(conSlot)
 
 	// Apply the memory limit (global option; see defaultMaxMemory). A bad
 	// user-supplied value must surface, not be swallowed.

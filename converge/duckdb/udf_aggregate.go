@@ -180,14 +180,14 @@ func (mod *module) RegisterAggregateUDF(con int32, name string, paramTypeIDs []i
 			h := mod.readI64(blob)
 			v, ferr := impl.Finalize(mod.aggState(h))
 			if ferr != nil {
-				m.Xduckdb_aggregate_function_set_error(info, mod.cstring(fmt.Sprintf("duckdb: aggregate %q finalize: %v", name, ferr)))
+				mod.setAggregateFunctionError(info, fmt.Sprintf("duckdb: aggregate %q finalize: %v", name, ferr))
 				return
 			}
 			if err := mod.writeCell(retTypeID, result, out, offset+i, v); err != nil {
 				// A misdeclared retTypeID vs Finalize value surfaces through DuckDB's
 				// aggregate error channel (mirrors the cgo bridge's agg_set_error), which
 				// aborts the query with this message rather than crashing the engine.
-				m.Xduckdb_aggregate_function_set_error(info, mod.cstring(fmt.Sprintf("duckdb: aggregate %q finalize: %v", name, err)))
+				mod.setAggregateFunctionError(info, fmt.Sprintf("duckdb: aggregate %q finalize: %v", name, err))
 				return
 			}
 		}

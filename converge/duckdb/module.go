@@ -214,6 +214,9 @@ func (mod *module) goString(ptr int32) string {
 // allocOut reserves n zeroed bytes (for out-params: handles, result structs).
 func (mod *module) allocOut(n int32) int32 {
 	ptr := mod.m.Xmalloc(n)
+	if ptr == 0 {
+		panic("duckdb: malloc returned null")
+	}
 	mem := mod.mem()
 	for i := int32(0); i < n; i++ {
 		mem[ptr+i] = 0
@@ -222,6 +225,24 @@ func (mod *module) allocOut(n int32) int32 {
 }
 
 func (mod *module) free(ptr int32) { mod.m.Xfree(ptr) }
+
+func (mod *module) setScalarFunctionError(info int32, msg string) {
+	ptr := mod.cstring(msg)
+	defer mod.free(ptr)
+	mod.m.Xduckdb_scalar_function_set_error(info, ptr)
+}
+
+func (mod *module) setAggregateFunctionError(info int32, msg string) {
+	ptr := mod.cstring(msg)
+	defer mod.free(ptr)
+	mod.m.Xduckdb_aggregate_function_set_error(info, ptr)
+}
+
+func (mod *module) setTableFunctionError(info int32, msg string) {
+	ptr := mod.cstring(msg)
+	defer mod.free(ptr)
+	mod.m.Xduckdb_function_set_error(info, ptr)
+}
 
 func (mod *module) readU32(ptr int32) uint32  { return binary.LittleEndian.Uint32(mod.mem()[ptr:]) }
 func (mod *module) readU64(ptr int32) uint64  { return binary.LittleEndian.Uint64(mod.mem()[ptr:]) }

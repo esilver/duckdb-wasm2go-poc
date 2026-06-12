@@ -228,7 +228,7 @@ func (a *Appender) registerFeedLocked(co *conn) error {
 			for r := 0; r < n; r++ {
 				if err := mod.writeCell(col.typeID, vec, data, int64(r), a.rows[a.cursor+r][c]); err != nil {
 					a.scanErr = fmt.Errorf("row %d, column %q: %w", a.cursor+r, col.name, err)
-					m.Xduckdb_function_set_error(info, mod.cstring(a.scanErr.Error()))
+					mod.setTableFunctionError(info, a.scanErr.Error())
 					return
 				}
 			}

@@ -145,11 +145,11 @@ func (mod *module) registerAggregateBand(con int32, name string, opts AggregateO
 			h := mod.readI64(mod.readPtr(source + int32(i*4)))
 			v, ferr := impl.Finalize(mod.aggState(h))
 			if ferr != nil {
-				m.Xduckdb_aggregate_function_set_error(info, mod.cstring(fmt.Sprintf("duckdb: aggregate %q finalize: %v", name, ferr)))
+				mod.setAggregateFunctionError(info, fmt.Sprintf("duckdb: aggregate %q finalize: %v", name, ferr))
 				return
 			}
 			if err := mod.writeCell(opts.ResultTypeID, result, out, offset+i, v); err != nil {
-				m.Xduckdb_aggregate_function_set_error(info, mod.cstring(fmt.Sprintf("duckdb: aggregate %q finalize: %v", name, err)))
+				mod.setAggregateFunctionError(info, fmt.Sprintf("duckdb: aggregate %q finalize: %v", name, err))
 				return
 			}
 		}

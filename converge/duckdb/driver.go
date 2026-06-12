@@ -341,16 +341,25 @@ func txBoundary(stmt string) int {
 }
 
 // forEachStatement calls fn for each ';'-separated top-level statement of
-// query, skipping over single/double-quoted strings (dollar-quoting is not
-// handled; transaction keywords do not hide in dollar-quoted bodies in
-// practice, and a misclassification only perturbs the inTx hint).
+// query, skipping over single/double-quoted strings. SQL escapes a quote by
+// doubling it inside the same quoted string, so "'it”;s'" must not split at the
+// embedded semicolon. Dollar-quoting is not handled; transaction keywords do
+// not hide in dollar-quoted bodies in practice, and a misclassification only
+// perturbs the inTx hint.
 func forEachStatement(query string, fn func(stmt string)) {
 	start := 0
 	for i := 0; i < len(query); i++ {
 		switch query[i] {
 		case '\'', '"':
 			q := query[i]
-			for i++; i < len(query) && query[i] != q; i++ {
+			for i++; i < len(query); i++ {
+				if query[i] == q && i+1 < len(query) && query[i+1] == q {
+					i++
+					continue
+				}
+				if query[i] == q {
+					break
+				}
 			}
 		case ';':
 			fn(query[start:i])

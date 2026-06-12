@@ -7,7 +7,7 @@ W=${1:?wasm path}
 TAG=${2:-X}
 CDIR=${3:-$HERE/converge}
 GEN=$CDIR/genpkg/gen.go
-export GOTOOLCHAIN=go1.25.6
+export GOTOOLCHAIN=go1.26.2
 export CGO_ENABLED=0
 export PATH="$(go env GOPATH)/bin:/opt/homebrew/bin:$PATH"
 

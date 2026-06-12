@@ -238,6 +238,7 @@ func (a *Appender) registerFeedLocked(co *conn) error {
 	}
 
 	tf := m.Xduckdb_create_table_function()
+	defer destroyTableFunction(mod, tf)
 	namePtr := mod.cstring(a.tfName)
 	m.Xduckdb_table_function_set_name(tf, namePtr)
 	mod.free(namePtr)

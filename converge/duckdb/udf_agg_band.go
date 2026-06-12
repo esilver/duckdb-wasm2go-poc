@@ -165,22 +165,29 @@ func (mod *module) registerAggregateBand(con int32, name string, opts AggregateO
 
 	// One function set carrying every arity, registered in a single CreateFunction
 	// call (which therefore never hits the broken aggregate alter/merge path).
-	// Handles are not destroyed afterwards — consistent with the rest of the
-	// driver (registration is once-per-process-boot; the leak is a few dozen
-	// small engine objects).
-	set := m.Xduckdb_create_aggregate_function_set(mod.cstring(name))
+	setNamePtr := mod.cstring(name)
+	set := m.Xduckdb_create_aggregate_function_set(setNamePtr)
+	mod.free(setNamePtr)
+	defer destroyAggregateFunctionSet(mod, set)
 	for p := opts.MinArgs; p <= opts.MaxArgs; p++ {
 		af := m.Xduckdb_create_aggregate_function()
-		m.Xduckdb_aggregate_function_set_name(af, mod.cstring(name))
+		namePtr := mod.cstring(name)
+		m.Xduckdb_aggregate_function_set_name(af, namePtr)
+		mod.free(namePtr)
 		for i := 0; i < p; i++ {
-			m.Xduckdb_aggregate_function_add_parameter(af, m.Xduckdb_create_logical_type(dtAny))
+			lt := m.Xduckdb_create_logical_type(dtAny)
+			m.Xduckdb_aggregate_function_add_parameter(af, lt)
+			destroyLogicalType(mod, lt)
 		}
-		m.Xduckdb_aggregate_function_set_return_type(af, m.Xduckdb_create_logical_type(opts.ResultTypeID))
+		retType := m.Xduckdb_create_logical_type(opts.ResultTypeID)
+		m.Xduckdb_aggregate_function_set_return_type(af, retType)
+		destroyLogicalType(mod, retType)
 		// NULL rows must reach Update (the impls own their NULL semantics).
 		m.Xduckdb_aggregate_function_set_special_handling(af)
 		m.Xduckdb_aggregate_function_set_functions(af, idxSize, idxInit, idxUpdate, idxCombine, idxFinalize)
 		m.Xduckdb_aggregate_function_set_destructor(af, idxDestroy)
 		if rc := m.Xduckdb_add_aggregate_function_to_set(set, af); rc != 0 {
+			destroyAggregateFunction(mod, af)
 			return fmt.Errorf("duckdb: aggregate %q: add arity-%d overload to set failed (rc=%d): %s", name, p, rc, orUnknown(mod.lastError()))
 		}
 	}

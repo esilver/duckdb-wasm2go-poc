@@ -13,6 +13,16 @@
 > tables below were pre-run estimates. Paths like `/tmp/gsx-duckdb` are
 > machine-local snapshot references from the writing session, not links a
 > repo visitor can follow.
+>
+> **Current status note (2026-06-12).** Several risk statements below are
+> historical and have since been retired in the PoC and published driver:
+> connector-scoped in-memory sharing is implemented through `module.connect`,
+> aggregate finalize errors use DuckDB's aggregate error channel instead of
+> panicking, aggregate special-null handling is wired, and the function-set
+> overload path is present. Remaining design risks are now narrower: memory
+> behavior under large grouped aggregates, full BigQuery aggregate-clause
+> lowering, cancellation semantics at the emulator job layer, and continued
+> parity sweeps against DuckDB's sqllogictest corpus.
 
 ---
 

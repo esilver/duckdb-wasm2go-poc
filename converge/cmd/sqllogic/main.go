@@ -1,6 +1,8 @@
 // Command sqllogic runs DuckDB's sqllogictest corpus (duckdb-src/test/sql/**)
-// against the pure-Go (wasm2go, CGO_ENABLED=0) DuckDB engine via the
-// duckdbconverge/duckdb database/sql driver.
+// against the published pure-Go (wasm2go, CGO_ENABLED=0) DuckDB database/sql
+// driver. The runner is intentionally a standalone module that imports
+// github.com/esilver/duckdb-go-pure, not this repository's local generated
+// engine packages.
 //
 // It is a MEASUREMENT tool: each .test file gets a fresh in-memory database;
 // the file either PASSes, FAILs (first failing record reported), or is

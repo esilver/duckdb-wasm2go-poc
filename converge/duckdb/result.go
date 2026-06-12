@@ -259,6 +259,11 @@ func (r *rows) Close() error {
 		return nil
 	}
 	r.closed = true
+	if r.mod.poisoned {
+		r.chunk = 0
+		r.resPtr = 0
+		return nil
+	}
 	r.releaseChunk()
 	// duckdb_destroy_result(duckdb_result*) — by-value result lowered to pointer,
 	// so the generated method takes resPtr directly.
@@ -291,8 +296,14 @@ func (r *rows) releaseChunk() {
 func (r *rows) Next(dest []driver.Value) (err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	defer guardEnginePanic(&err)
+	defer guardEnginePanic(&err, func() {
+		r.mod.poisoned = true
+		r.closed = true
+	})
 	mod := r.mod
+	if mod.poisoned {
+		return driver.ErrBadConn
+	}
 	// Advance to a chunk that still has rows.
 	for r.chunk == 0 || r.cursor >= r.chunkLen {
 		r.releaseChunk()

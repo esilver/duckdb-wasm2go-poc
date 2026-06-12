@@ -21,15 +21,10 @@ import (
 // override CreateInfo::GetAlterInfo (only CreateScalarFunctionInfo does), so the
 // catalog's alter path throws. This is an upstream engine limitation, not a
 // wasm/export problem — no in-build sequence of C-API calls can merge aggregate
-// overloads, because the only other route (duckdb_create_aggregate_function_set +
+// overloads. The supported route is duckdb_create_aggregate_function_set +
 // duckdb_add_aggregate_function_to_set + duckdb_register_aggregate_function_set,
 // which registers ALL arities in ONE CreateFunction call and therefore never hits
-// the conflict path) is unusable: duckdb_add_aggregate_function_to_set was
-// dead-code-eliminated from the wasm build (absent from /tmp/exports_arg.txt and
-// from genpkg/gen.go; create/register/destroy set ARE exported).
-//
-// Fix: add _duckdb_add_aggregate_function_to_set to the export list and rebuild/
-// retranspile, then implement multi-arity bands via the function-set path.
+// the conflict path. This build now exports that route; see udf_agg_band.go.
 //
 // TestAggOverloadMergeCheck asserts the CURRENT (broken-merge) behavior so this
 // probe flips loudly if a rebuilt engine changes the answer.

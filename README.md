@@ -1,5 +1,7 @@
 # DuckDB in pure Go: wasm2go engine pipeline
 
+[![CI](https://github.com/esilver/duckdb-wasm2go-poc/actions/workflows/ci.yml/badge.svg)](https://github.com/esilver/duckdb-wasm2go-poc/actions/workflows/ci.yml)
+
 This repo started as a proof of concept ("can DuckDB survive a trip through
 [`ncruces/wasm2go`](https://github.com/ncruces/wasm2go)?"). It is now the
 **build pipeline and engineering log for a working pure-Go DuckDB**:
@@ -15,18 +17,14 @@ host filesystem, and passes large third-party test corpora (numbers below).
 
 ## Results
 
-### BigQuery dialect conformance (googlesqlite spec suite, 994 specs)
+### BigQuery dialect conformance
 
-| Backend | PASS | FAIL | SKIP |
-|---|---|---|---|
-| **pure-Go DuckDB (this engine)** | **986** | **0** | 8 |
-| native DuckDB via cgo (baseline) | 972 | 14 | 8 |
-
-The pure-Go backend **exceeds the cgo baseline with zero failures**. The cgo
-build's 14 `search`/`objectref` failures turned out to be a routing gap in the
-emulator (the pure-Go function bodies always existed but were never wired on
-the DuckDB path); the fix applies to both backends. The 8 skips are
-proto/graph features with no assertable cases. See
+BigQuery dialect conformance is owned by downstream
+[`googlesqlite`](https://github.com/esilver/googlesqlite), which runs a named
+spec conformance gate in CI against this pure-Go DuckDB engine. This repo keeps
+the engine build pipeline and sqllogictest runner; the current per-spec and
+per-case BigQuery coverage should be read from the `googlesqlite` README,
+generated spec matrix, and CI logs rather than duplicated here. See
 [`googlesqlite` REPRODUCE-PURE-GO.md](https://github.com/esilver/googlesqlite/blob/main/REPRODUCE-PURE-GO.md).
 
 ### DuckDB's own sqllogictest corpus (`duckdb-src/test/sql/**`)

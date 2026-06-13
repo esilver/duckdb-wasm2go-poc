@@ -1,0 +1,39 @@
+name: CI
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v6
+      - name: check zsh scripts
+        run: |
+          zsh -n \
+            build.sh \
+            build_fs.sh \
+            build_full.sh \
+            build_with_core.sh \
+            orchestrate.sh \
+            rebuild_all.sh \
+            rebuild_fs_all.sh \
+            run_converge.sh \
+            transpile.sh \
+            verify_shape.sh
+      - name: check bash scripts
+        run: |
+          bash -n harness/build-poc.sh
+      - name: setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.2"
+          cache: true
+          cache-dependency-path: converge/cmd/sqllogic/go.sum
+      - name: compile sqllogictest runner
+        run: GOWORK=off go test ./...
+        working-directory: converge/cmd/sqllogic

@@ -3,8 +3,9 @@
 > **HISTORICAL DOCUMENT (2026-06-08 snapshot — the PoC era).** Everything below
 > describes the original de-risking run, including stages that have since been
 > superseded. **The engine shipped**: DuckDB v1.5.3 in pure Go, published as
-> [`duckdb-go-pure`](https://github.com/esilver/duckdb-go-pure) v0.3.2,
-> 2,513/3,322 sqllogictest corpus files passing (20 FAIL / 789 SKIP — see
+> [`duckdb-go-pure`](https://github.com/esilver/duckdb-go-pure) and current
+> through v0.3.13, with 2,522/3,322 sqllogictest corpus files passing
+> (9 FAIL / 791 SKIP — see
 > [`converge/cmd/sqllogic/KNOWN-LIMITS.md`](converge/cmd/sqllogic/KNOWN-LIMITS.md))
 > and 986/994 downstream BigQuery-dialect specs. For the **current** pipeline
 > use `./rebuild_fs_all.sh` (host-FS wasm, `GENOPT=1` for the fully-optimized

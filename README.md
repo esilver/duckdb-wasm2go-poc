@@ -98,8 +98,9 @@ observed) — the two optimizations do not compose. The splitter is also what
 makes `GOOS=js` builds possible at all: the largest function (36.5k lines)
 exceeded the Go compiler's 65536-SSA-block hard cap. The monolithic `genpkg`
 (default tag, textually inlined, `-N -l`) remains the reference engine. The
-optimized layout ships as `duckdb-go-pure` **v0.3.2** — flag-free for
-consumers since v0.3.1 (plain `go build`, no tags, no gcflags).
+optimized layout ships as `duckdb-go-pure` and is current through
+**v0.3.13** — flag-free for consumers since v0.3.1 (plain `go build`, no
+tags, no gcflags).
 
 ## How it works
 

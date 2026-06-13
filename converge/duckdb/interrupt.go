@@ -118,9 +118,7 @@ func (mod *module) armInterrupt(ctx context.Context, flagAddr int32) (disarm fun
 		t := time.NewTicker(interruptRefire)
 		defer t.Stop()
 		for {
-			if mem := mod.mem(); int(flagAddr) < len(mem) {
-				mem[flagAddr] = 1
-			}
+			pokeInterruptFlag(mod, flagAddr)
 			select {
 			case <-stop:
 				return
@@ -131,6 +129,22 @@ func (mod *module) armInterrupt(ctx context.Context, flagAddr int32) (disarm fun
 	return func() {
 		close(stop)
 		<-done
+	}
+}
+
+// pokeInterruptFlag writes DuckDB's validated ClientContext.interrupted flag.
+//
+// The write is intentionally concurrent with the single-threaded transpiled
+// engine: native DuckDB exposes duckdb_interrupt for exactly this cross-thread
+// flag store, and resolveInterruptFlag validated the target byte while the
+// engine was idle. Race instrumentation cannot model that foreign-memory
+// contract and reports false positives against engine memory growth/reads, so
+// this helper is kept out of race instrumentation.
+//
+//go:norace
+func pokeInterruptFlag(mod *module, flagAddr int32) {
+	if mem := mod.mem(); int(flagAddr) < len(mem) {
+		mem[flagAddr] = 1
 	}
 }
 

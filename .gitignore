@@ -1,5 +1,4 @@
-# Regenerable large artifacts (see README.md for how to rebuild).
-# build.sh -> duckdb_core.wasm ; transpile.sh -> duckdb_core_gen.go
+# Regenerable large artifacts (see README.md for current rebuild entry points).
 
 # DuckDB amalgamation source + download (from the v1.5.3 release zip)
 amalg/
@@ -8,20 +7,17 @@ libduckdb-src.zip
 # Shallow upstream clone, used only to inspect scripts
 /duckdb/
 
-# The 85.8 MB standalone wasm (rebuild with ./build.sh)
+# Standalone wasm variants.
 duckdb_core.wasm
 
-# The 490 MB wasm2go output (rebuild with ./transpile.sh)
+# Old standalone wasm2go output location.
 duckdb_core_gen.go
-
-# Compiled parsecheck binary (go build -o parsecheck ./parsecheck/main.go)
-parsecheck/parsecheck
 
 # macOS cruft
 .DS_Store
 .gocache/
 
-# ---- Runnable PoC: regenerable large artifacts (rebuild via build_with_core.sh + rebuild_all.sh) ----
+# ---- Runnable PoC: regenerable large artifacts (rebuild via rebuild_fs_all.sh) ----
 # All standalone wasm variants (-Oz, -O2, gc, core_functions, wasm-opt, ...)
 *.wasm
 duckdb_core.wasm.trackB

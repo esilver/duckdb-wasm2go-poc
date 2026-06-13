@@ -1,7 +1,7 @@
 #!/bin/zsh
-# Tier 2 "Path B" build: copy of build_full.sh that ALSO compiles host_fs.cpp
-# (a custom DuckDB FileSystem whose virtuals call IMPORTED host_* functions) and
-# exports _register_host_fs. The undefined host_* extern "C" symbols become clean
+# Tier 2 host-FS wasm build. Compiles host_fs.cpp, a custom DuckDB FileSystem
+# whose virtuals call imported host_* functions, and exports _register_host_fs.
+# The undefined host_* extern "C" symbols become clean
 # env.host_* wasm imports under -sERROR_ON_UNDEFINED_SYMBOLS=0; the pure-Go host
 # (converge/wasishim/hostfs.go) implements them against the `os` package.
 set -eu

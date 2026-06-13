@@ -5,10 +5,12 @@
 This repo started as a proof of concept ("can DuckDB survive a trip through
 [`ncruces/wasm2go`](https://github.com/ncruces/wasm2go)?"). It is now the
 **build pipeline and engineering log for a working pure-Go DuckDB**:
-DuckDB **v1.5.3** (with the `core_functions`, `json` and `icu` extensions
-statically linked) compiled to a standalone WebAssembly module, transpiled to
+DuckDB **v1.5.3** compiled to a standalone WebAssembly module, transpiled to
 plain Go, and driven through the DuckDB C API — **`CGO_ENABLED=0`, no cgo, no
-shared libraries, no wasm runtime**.
+shared libraries, no wasm runtime**. The default lane statically links
+`core_functions`, `json`, and `icu`; the promoted parquet lane also links
+DuckDB's `parquet` extension and proves `read_parquet` plus Parquet round-trip
+I/O locally.
 
 The result is not a toy. It ships as a go-gettable `database/sql` driver
 ([`duckdb-go-pure`](https://github.com/esilver/duckdb-go-pure)), supports
@@ -65,13 +67,6 @@ optimized** — no `-N`, no `-l` — runs queries **2.3–2.9× faster** than th
 no-opt reference build, and is what made `GOOS=js`/browser builds possible at
 all. The remaining structural gap vs native DuckDB is SIMD: wasm2go has no
 SIMD support, so the wasm is built `-mno-simd128`.
-
-*History:* the original engine package could only be compiled with Go
-optimization disabled (`-N -l` — full optimization OOMed the Go compiler on a
-package that size), which put that build at roughly **5–22× slower than
-native DuckDB** (widest on SIMD-friendly scan/aggregate, narrower on
-join/hash/string-heavy work). Benchmarks and the tuning-lever log are in
-[RESULTS-runnable-poc.md](RESULTS-runnable-poc.md).
 
 **How the optimized engine works:** two transforms run via
 `GENOPT=1 ./rebuild_fs_all.sh`: a multi-package shard
@@ -132,13 +127,8 @@ Three host-side ideas make it real:
    `call_indirect`s straight back into Go. This is what makes vectorized
    scalar **and aggregate** UDFs possible with no C involved.
 
-The wasm-shape requirements (standalone module, no `dylink.0`, no GOT
-imports, no SIMD, no EH-proposal opcodes) and how each build wall fell
-(`-Oz` vs the 197k-function `-O0` build, the `NewBulk too big` compiler
-limit, bundling `core_functions`, `-DNDEBUG`) are written up in
-[RESULTS-runnable-poc.md](RESULTS-runnable-poc.md) and the spike notes
-([SPIKE-T1](SPIKE-T1-cpp-exceptions.md), [SPIKE-T2](SPIKE-T2-size-wall.md),
-[SWAP-BLUEPRINT.md](SWAP-BLUEPRINT.md)).
+The wasm-shape requirements are encoded in the rebuild scripts: standalone
+module, no `dylink.0`, no GOT imports, no SIMD, and no EH-proposal opcodes.
 
 ## The repo family
 
@@ -154,9 +144,22 @@ need this repo's pipeline unless you are regenerating the engine.
 
 ## Reproducing the engine
 
-One command rebuilds everything from the DuckDB v1.5.3 sources on this
-machine class (macOS arm64; the transpile/compile steps want tens of GB of
-RAM):
+The top-level entry points are intentionally limited to the current engine
+lanes:
+
+- `./rebuild_fs_all.sh` builds the host-filesystem DuckDB wasm, regenerates the
+  Go engine, and compile-checks the reference layout.
+- `GENOPT=1 ./rebuild_fs_all.sh` also produces and checks the optimized
+  sharded `genopt` layout.
+- `GENOPT=1 ./rebuild_parquet.sh` consumes a pre-staged parquet-flavored
+  `duckdb_fs.wasm`, regenerates the same Go layouts, and compile-checks them.
+  It does not build the parquet wasm itself. The latest local proof
+  (2026-06-13) showed `read_parquet` over a DuckDB fixture and a
+  `COPY ... TO (FORMAT 'parquet')` round trip both working in pure Go.
+
+The default rebuild command still rebuilds everything from the DuckDB v1.5.3
+sources on this machine class (macOS arm64; the transpile/compile steps want
+tens of GB of RAM):
 
 ```sh
 ./rebuild_fs_all.sh   # build_fs.sh (emcc) -> regen exhost invokes ->
@@ -185,12 +188,17 @@ Key invariants the scripts encode:
   (output-corruption bug in v0.3.0–v0.4.6, upstream issue 31), and the
   version used is recorded in `converge/genpkg/TRANSPILER_VERSION`.
 
-Step-by-step detail, the exact emcc flags, shape verification
-(`verify_shape.sh`), and the build-wall narrative live in
-[RESULTS-runnable-poc.md](RESULTS-runnable-poc.md) and
-[duckdb-purego-poc-runbook.md](duckdb-purego-poc-runbook.md). To refresh the
-published library from a new `gen.go`/`gen.dat`, see "Regenerating the
+Step-by-step detail lives in the current scripts: `build_fs.sh`,
+`rebuild_fs_all.sh`, `rebuild_parquet.sh`, and `verify_shape.sh`. To refresh
+the published library from a new `gen.go`/`gen.dat`, see "Regenerating the
 engine" in the duckdb-go-pure README.
+
+## Repository map
+
+The root is for the current regeneration path only. Superseded scripts,
+spikes, and stale narrative notes were removed; recover them from git history
+only if a specific investigation needs them. A concise file-by-file map is in
+[`REPO_MAP.md`](REPO_MAP.md).
 
 ## Credits
 

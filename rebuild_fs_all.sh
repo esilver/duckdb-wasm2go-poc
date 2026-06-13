@@ -1,6 +1,6 @@
 #!/bin/zsh
 # Full Tier-2 pipeline: build the host-FS wasm (build_fs.sh) -> regen exhost
-# invokes -> transpile -> split New -> go build. This is rebuild_all.sh for the
+# invokes -> transpile -> split New -> go build. This regenerates the
 # duckdb_fs.wasm flavor the current converge/genpkg is generated from (host
 # filesystem imports + the full C-API export list in exports_arg.txt).
 set -eu

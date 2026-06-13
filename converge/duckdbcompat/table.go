@@ -8,11 +8,11 @@ import (
 	convergeduckdb "duckdbconverge/duckdb"
 )
 
-// This file is the compat mirror of the duckdb-go table-UDF surface (SWAP-BLUEPRINT
-// §1.4 — Surface 4). The emulator only ever registers two TVFs (`appends`,
-// `changes`), both of which are degenerate zero-row stubs: their RowTableSource
-// reports Cardinality {0, true} and FillRow always returns (false, nil). Faithful
-// row-producing table functions are out of scope.
+// This file is the compat mirror of the duckdb-go table-UDF surface. The
+// emulator only ever registers two TVFs (`appends`, `changes`), both of which
+// are degenerate zero-row stubs: their RowTableSource reports Cardinality
+// {0, true} and FillRow always returns (false, nil). Faithful row-producing
+// table functions are out of scope.
 //
 // Because no rows are ever produced, we do not implement DuckDB's
 // create_table_function C-API at all. Instead RegisterTableUDF runs a plain

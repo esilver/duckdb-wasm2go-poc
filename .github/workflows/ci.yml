@@ -18,17 +18,9 @@ jobs:
           sudo apt-get install -y zsh
       - name: check zsh scripts
         run: |
-          zsh -n \
-            build.sh \
-            build_fs.sh \
-            build_full.sh \
-            build_with_core.sh \
-            orchestrate.sh \
-            rebuild_all.sh \
-            rebuild_fs_all.sh \
-            run_converge.sh \
-            transpile.sh \
-            verify_shape.sh
+          git ls-files '*.sh' \
+            | grep -v '^harness/build-poc.sh$' \
+            | xargs zsh -n
       - name: check bash scripts
         run: |
           bash -n harness/build-poc.sh

@@ -27,13 +27,16 @@ echo "### 1. build wasm (core_functions + host FS, NDEBUG, -Oz)"
 "$HERE/build_fs.sh" "$WASM"
 
 echo "### 2. regen exhost invokes for exact set"
-wasm-objdump -j Import -x "$WASM" 2>/dev/null | grep -oE 'invoke_[A-Za-z]+' | sort -u > /tmp/ra_want.txt
-NAMES=$(paste -sd, /tmp/ra_want.txt)
+ra_want=$(mktemp "${TMPDIR:-/tmp}/ra_want.XXXXXX")
+trap 'rm -f "$ra_want"' EXIT
+wasm-objdump -j Import -x "$WASM" 2>/dev/null | grep -oE 'invoke_[A-Za-z]+' | sort -u > "$ra_want"
+NAMES=$(paste -sd, "$ra_want")
 # GOWORK=off: the harness module is intentionally not in go.work (it is a
 # build-time tool, not part of the converge workspace).
 (cd "$HERE/harness" && GOWORK=off go run ./gen-invokes -names "$NAMES" -o "$HERE/converge/exhost/invokes.go")
 
 echo "### 3. transpile (-embed -unsafe)"
+mkdir -p "$HERE/converge/genpkg"
 rm -f "$HERE/converge/genpkg/gen.go" "$HERE/converge/genpkg/gen.dat"
 wasm2go -embed -unsafe -pkg duckdbcore -o "$HERE/converge/genpkg/gen.go" "$WASM"
 echo "wasm2go $WASM2GO_VERSION" > "$HERE/converge/genpkg/TRANSPILER_VERSION"

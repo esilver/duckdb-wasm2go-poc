@@ -1,3 +1,5 @@
+//go:build harness_generated
+
 // Command run drives a wasm2go-transpiled, C-API-shaped wasm module entirely in
 // pure Go (CGO_ENABLED=0). It wires the generated *Module to the exception host
 // (exhost) and the WASI/libc shim (wasishim), then calls the module's exported
@@ -9,7 +11,8 @@
 // duckdb_query / duckdb_value_int64 (see PLUGIN.md); only the method names and
 // the out-param layout change.
 //
-// Build/run: CGO_ENABLED=0 go run .   (no cgo, no external runtime)
+// Build/run: ./build-poc.sh && CGO_ENABLED=0 go run -tags harness_generated .
+// (no cgo, no external runtime)
 package main
 
 import (
@@ -76,8 +79,8 @@ type env struct {
 // the exception host's ABI adapter and the shim's memory adapter here.
 func (e *env) Init(m any) {
 	e.mod = m.(*poc.Module)
-	e.Host.Init(m)                     // exhost binds its ModuleABI via the binder
-	e.Shim.SetMem(memABI{m: e.mod})    // shim gets live memory access
+	e.Host.Init(m)                  // exhost binds its ModuleABI via the binder
+	e.Shim.SetMem(memABI{m: e.mod}) // shim gets live memory access
 }
 
 // newEnv builds the combined env. The exhost binder turns the *Module into a
@@ -195,7 +198,7 @@ func runScalar(m *poc.Module, sql string) queryResult {
 
 func main() {
 	e := newEnv()
-	m := poc.New(e) // calls e.Init(m): binds exception ABI + shim memory
+	m := poc.New(e)  // calls e.Init(m): binds exception ABI + shim memory
 	m.X_initialize() // run the module's ctors / start function
 
 	queries := []string{"SELECT 1", "SELECT 42", "SELECT bogus"}

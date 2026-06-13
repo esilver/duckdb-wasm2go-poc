@@ -1,12 +1,29 @@
-# Plugging the real DuckDB-C-API wasm into this harness
+# Historical validation harness
 
 This harness runs a wasm2go-transpiled, C-API-shaped wasm in **pure Go
 (CGO_ENABLED=0)**. It is validated end-to-end on `poc.wasm` (a tiny standalone
 C++ module shaped like the DuckDB C API) and on `wasitest/wasiprobe.wasm` (which
-forces the WASI/libc surface). When the standalone DuckDB-C-API wasm exists,
-follow the steps below; the host and shims do not change.
+forces the WASI/libc surface). This is now a historical validation harness: the
+active DuckDB engine path lives in `../converge`, and this directory is kept for
+the exception/WASI harness pattern plus the live `gen-invokes` helper.
 
-## 0. What "the DuckDB wasm" must be
+## Re-running the historical harness
+
+The runnable root command depends on generated `genpkg` output and is excluded
+from default builds. Recreate those artifacts first:
+
+```sh
+./build-poc.sh
+CGO_ENABLED=0 go run -tags harness_generated .
+go test -tags harness_generated ./...
+go test ./...
+```
+
+The tagged test command runs the generated root package. The raw `.cc` files are
+tagged `ignore`, so a plain `go test ./...` can validate the helper packages
+without requiring cgo or generated wasm2go output.
+
+## What "the DuckDB wasm" had to be
 
 Build DuckDB's C API the same way `poc.cc` is built (see the `emcc` line in
 `build-poc.sh` / the validation section of this repo):
@@ -145,16 +162,6 @@ Notes:
 - Call `m.X_initialize()` once after `New(...)` to run the wasm's
   constructors/start function before any C-API call.
 
-## 5. Run
-
-```
-CGO_ENABLED=0 go run .        # or go test ./...
-```
-
-Expected: `duckdb_value_int64(...) == 1`, and a deliberately bad query returns a
-DuckDB error string (via `duckdb_result_error`) rather than aborting - the same
-throw->catch behavior the harness already proves on `poc.wasm`.
-
 ## What is proven vs. what remains
 
 PROVEN end-to-end on standalone wasm, pure Go, CGO off:
@@ -167,8 +174,6 @@ PROVEN end-to-end on standalone wasm, pure Go, CGO off:
 - multi-import `New(wasiArg, envArg)` wiring;
 - cstring/out-param marshalling for args and return values.
 
-REMAINS, DuckDB-specific (cannot be done until the wasm exists):
-- confirm DuckDB's exact `invoke_*` set and regenerate with `-names`;
-- handle `duckdb_result`'s by-value struct layout (sret + field offsets);
-- if DuckDB's standalone build pulls syscalls beyond the current stubs for an
-  in-memory DB, implement those `X__syscall_*` (expected: none for `:memory:`).
+The DuckDB-specific work listed in the original harness notes has moved to the
+top-level `converge` module: exact `invoke_*` regeneration, `duckdb_result`
+layout handling, and residual syscall coverage are all represented there.

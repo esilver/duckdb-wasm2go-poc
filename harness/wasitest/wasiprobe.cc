@@ -1,3 +1,5 @@
+//go:build ignore
+
 // wasiprobe.cc - a second standalone wasm whose only job is to FORCE the WASI /
 // libc residual import surface that the tiny poc.cc avoided, so the wasishim
 // package is validated against a real importer (not just asserted). It:

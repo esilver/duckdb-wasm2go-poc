@@ -1,3 +1,5 @@
+//go:build ignore
+
 // poc.cc - a tiny standalone wasm that mimics the shape of the DuckDB C API
 // surface we will drive through wasm2go-generated Go. It is built EXACTLY like
 // the real DuckDB target (-sSTANDALONE_WASM -sFILESYSTEM=0 -fexceptions

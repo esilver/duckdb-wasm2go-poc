@@ -8,9 +8,16 @@ set -eu
 HERE=${0:a:h}
 DS=$HERE/duckdb-src
 OUT=${1:-$HERE/duckdb_fs.wasm}
-# The C-API export list lives in-repo (exports_arg.txt); /tmp/exports_arg.txt
-# was its original ad-hoc home and remains only as a fallback.
-EXPORTS="$(cat "$HERE/exports_arg.txt" 2>/dev/null || cat /tmp/exports_arg.txt),_register_host_fs,_host_fs_attach_to_config,_duckdb_open_ext,_duckdb_destroy_config"
+
+if [[ ! -f "$HERE/amalg/duckdb.cpp" || ! -d "$DS" ]]; then
+  echo "missing DuckDB build inputs; run ./bootstrap_duckdb.sh first" >&2
+  exit 1
+fi
+if [[ ! -f "$HERE/exports_arg.txt" ]]; then
+  echo "missing exports_arg.txt" >&2
+  exit 1
+fi
+EXPORTS="$(cat "$HERE/exports_arg.txt"),_register_host_fs,_host_fs_attach_to_config,_duckdb_open_ext,_duckdb_destroy_config"
 
 CF_SRCS=($(find "$DS/extension/core_functions" -name '*.cpp'))
 # json extension: json_each / json_extract / the JSON type. Statically linked

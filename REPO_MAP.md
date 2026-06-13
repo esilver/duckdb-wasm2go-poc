@@ -8,6 +8,8 @@ from the tree.
 
 - `rebuild_fs_all.sh`: current host-filesystem engine rebuild. With `GENOPT=1`
   it also emits and compile-checks the optimized sharded engine layout.
+- `bootstrap_duckdb.sh`: clean-clone setup for the gitignored DuckDB source
+  inputs and generated-output directories consumed by `rebuild_fs_all.sh`.
 - `rebuild_parquet.sh`: parquet engine regeneration path for an already-staged
   parquet-flavored `duckdb_fs.wasm`. It is intentionally separate because the
   parquet wasm build itself is still a manual developer lane.
@@ -20,9 +22,13 @@ from the tree.
   sqllogictest runner.
 - `harness/gen-invokes`: live build-time helper that regenerates exception
   trampoline wrappers for a wasm import set.
+- `harness/`: historical exception/WASI validation harness plus the live
+  `gen-invokes` helper. Its runnable demo requires `./build-poc.sh` and the
+  `harness_generated` build tag.
 
 ## Generated or local-only material
 
-- `duckdb-src/`, `duckdb_fs.wasm`, `converge/genpkg/`, and `converge/genopt/`
-  are intentionally gitignored and regenerated or staged locally.
+- `amalg/`, `duckdb-src/`, `duckdb_fs.wasm`, `converge/genpkg/`, and
+  `converge/genopt/` are intentionally gitignored and regenerated or staged
+  locally.
 - `.gocache/` is local cache only.

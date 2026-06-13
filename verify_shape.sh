@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Full shape verification per the deliverable spec. Arg1 = wasm file.
 HERE=${0:a:h}
-W=${1:-$HERE/duckdb_core.wasm}
+W=${1:-$HERE/duckdb_fs.wasm}
 echo "############ SHAPE VERIFY: $W ############"
 echo "size: $(ls -la "$W" | awk '{print $5}') bytes"
 echo

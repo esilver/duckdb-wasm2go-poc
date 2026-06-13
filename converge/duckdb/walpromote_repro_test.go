@@ -2,7 +2,6 @@ package duckdb
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"testing"
 )
@@ -12,24 +11,20 @@ import (
 // disabled), detach, then re-attach with STORAGE_VERSION 'latest' twice. The
 // table must survive every replay/append cycle.
 //
-// ROOT CAUSE (2026-06-10, checkpoint lane): host_fs.cpp OpenFile drops
+// ROOT CAUSE (2026-06-10, checkpoint lane): host_fs.cpp OpenFile dropped
 // FILE_FLAGS_APPEND. Native maps that flag to O_APPEND, and the WAL's
-// BufferedFileWriter relies on it (position-form FileSystem::Write). Our
-// HostFileHandle starts position=0, so re-attaching an existing WAL and
-// appending OVERWRITES the WAL head in place (size stays constant, the
-// CREATE TABLE entry is destroyed, and the next replay finds no table).
+// BufferedFileWriter relies on it (position-form FileSystem::Write). The old
+// HostFileHandle started position=0, so re-attaching an existing WAL and
+// appending OVERWROTE the WAL head in place (size stayed constant, the CREATE
+// TABLE entry was destroyed, and the next replay found no table).
 // Byte-level proof: after cycle1 the WAL is still 275 bytes but its first
 // ~108 bytes are the cycle1 use_table/insert/flush entries; the tail is the
 // old cycle0 content. Native grows 275 -> 383.
 //
-// The fix is C++ (host_fs.cpp -> wasm -> transpile), owned by the wasm
-// rebuild pipeline: initialize the handle position to the file size when
-// flags.OpenForAppending(). Until that lands this test SKIPS unless
-// WALREPRO=1 is set; flip it to always-on once the rebuilt engine ships.
+// The source fix is C++ (host_fs.cpp -> wasm -> transpile): initialize the
+// handle position to the file size when flags.OpenForAppending(). Keep this
+// regression always-on wherever a generated engine is present.
 func TestWALPromoteVersionRepro(t *testing.T) {
-	if os.Getenv("WALREPRO") == "" {
-		t.Skip("known engine-glue bug: host_fs.cpp drops FILE_FLAGS_APPEND (WAL append overwrites offset 0); set WALREPRO=1 to run, remove skip after the wasm rebuild lands the fix")
-	}
 	ctx := context.Background()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "wal_promote.db")

@@ -1,4 +1,4 @@
-# Regenerable artifacts (not committed): produced by build.sh/transpile.sh
+# Regenerable harness artifacts (not committed).
 genpkg/
 *.wasm
 *_gen.go

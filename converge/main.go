@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -60,6 +61,21 @@ func extractMsg(raw string) string {
 		return msg
 	}
 	return raw
+}
+
+func parquetFixturePath() string {
+	if fixture := os.Getenv("DUCKDB_PARQUET_FIXTURE"); fixture != "" {
+		return fixture
+	}
+	for _, fixture := range []string{
+		filepath.Join("duckdb-src", "data", "parquet-testing", "simple.parquet"),
+		filepath.Join("..", "duckdb-src", "data", "parquet-testing", "simple.parquet"),
+	} {
+		if _, err := os.Stat(fixture); err == nil {
+			return fixture
+		}
+	}
+	return filepath.Join("duckdb-src", "data", "parquet-testing", "simple.parquet")
 }
 
 // ---- ABI adapters: the generated *core.Module -> exhost/wasishim interfaces --
@@ -344,9 +360,10 @@ func main() {
 	// then COPY ... TO verifies hostfs create/write by reading the generated
 	// Parquet file back. The fixture is part of the fetched DuckDB corpus under
 	// duckdb-src (gitignored), so this proof only runs where that corpus has
-	// been cloned locally; missing files print an error instead of failing.
+	// been cloned locally. Override with DUCKDB_PARQUET_FIXTURE; missing files
+	// print an error instead of failing.
 	{
-		const fixture = "/Users/elisilver/workspace/chicory/duckdb-wasm2go-poc/duckdb-src/data/parquet-testing/simple.parquet"
+		fixture := parquetFixturePath()
 		if cnt, _, rows, err := queryInt64(m, h, "SELECT COUNT(*) FROM read_parquet('"+fixture+"')"); err != nil {
 			fmt.Printf("%-44s -> ERROR: %v\n", "PARQUET read_parquet(fixture)", err)
 		} else {
@@ -376,13 +393,13 @@ func main() {
 	}
 	fmt.Println("\n-- integer/aggregate results --")
 	for _, q := range []string{
-		"SELECT sum(x) FROM s",         // 152
-		"SELECT min(x) FROM s",         // 7
-		"SELECT max(x) FROM s",         // 100
-		"SELECT count(*) FROM s",       // 4
-		"SELECT cast(avg(x) AS BIGINT) FROM s",          // 38
+		"SELECT sum(x) FROM s",                               // 152
+		"SELECT min(x) FROM s",                               // 7
+		"SELECT max(x) FROM s",                               // 100
+		"SELECT count(*) FROM s",                             // 4
+		"SELECT cast(avg(x) AS BIGINT) FROM s",               // 38
 		"SELECT sum(x) FROM s GROUP BY g ORDER BY g LIMIT 1", // 42 (group 'a')
-		"SELECT length('hello world')", // 11
+		"SELECT length('hello world')",                       // 11
 	} {
 		if val, _, _, err := queryInt64(m, h, q); err != nil {
 			fmt.Printf("  %-52s -> ERROR: %v\n", q, err)
@@ -392,8 +409,8 @@ func main() {
 	}
 	fmt.Println("\n-- string/varchar results --")
 	for _, q := range []string{
-		"SELECT upper('duckdb')",                 // DUCKDB
-		"SELECT concat('pure', '-', 'go')",       // pure-go
+		"SELECT upper('duckdb')",                                               // DUCKDB
+		"SELECT concat('pure', '-', 'go')",                                     // pure-go
 		"SELECT string_agg(g, ',') FROM (SELECT DISTINCT g FROM s ORDER BY g)", // a,b
 		"SELECT printf('%d rows', count(*)) FROM s",                            // 4 rows
 	} {
@@ -421,7 +438,7 @@ func main() {
 	if _, _, _, err := queryInt64(m, h, bench); err != nil {
 		fmt.Printf("  bench ERROR: %v\n", err)
 	} else {
-		best := time.Duration(1<<62)
+		best := time.Duration(1 << 62)
 		var got int64
 		for i := 0; i < 3; i++ {
 			t0 := time.Now()

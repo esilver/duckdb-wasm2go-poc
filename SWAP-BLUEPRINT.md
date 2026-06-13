@@ -14,12 +14,14 @@
 > machine-local snapshot references from the writing session, not links a
 > repo visitor can follow.
 >
-> **Current status note (2026-06-12).** Several risk statements below are
+> **Current status note (2026-06-13).** Several risk statements below are
 > historical and have since been retired in the PoC and published driver:
 > connector-scoped in-memory sharing is implemented through `module.connect`,
 > aggregate finalize errors use DuckDB's aggregate error channel instead of
 > panicking, aggregate special-null handling is wired, and the function-set
-> overload path is present. Remaining design risks are now narrower: memory
+> overload path is present. The old cgo aggregate bridge is now archived behind
+> `//go:build ignore`; normal and accidental `-tags duckdb_cgo` builds use the
+> supported pure-Go bridge. Remaining design risks are now narrower: memory
 > behavior under large grouped aggregates, full BigQuery aggregate-clause
 > lowering, cancellation semantics at the emulator job layer, and continued
 > parity sweeps against DuckDB's sqllogictest corpus.
@@ -133,11 +135,22 @@ Three categories of emulator change:
    ```
    With `replace`, `duckdb.Driver{}` resolves to the compat `Driver`, so **even this is untouched**. (Confirm `duckdbDSN` conformance — §3 T0.)
 
-3. **The cgo aggregate TU** — `duckdb_aggregate_udf.go` is the one file that genuinely must change. Provide it as a **build-tagged pair**:
-   - `duckdb_aggregate_udf.go` → add `//go:build cgo` (or `duckdb_cgo`) — the existing cgo version, untouched.
-   - `duckdb_aggregate_udf_purego.go` (NEW) → `//go:build !cgo` — the pure-Go rewrite from §1.3, calling `mod.RegisterAggregateUDF`. Both expose the same package-level `registerDuckDBAggregates(db *sql.DB) error` so `driver.go:208` is unchanged.
+3. **The aggregate bridge** — this was the one emulator file that could not be
+   handled by import replacement alone. The executed implementation keeps the
+   historical cgo file as an archive-only reference:
+   - `duckdb_aggregate_udf.go` → `//go:build ignore`, not selectable by normal
+     builds or accidental `-tags duckdb_cgo` builds.
+   - `duckdb_aggregate_udf_purego.go` → the supported bridge, calling the pure
+     engine's aggregate registration surface. Both expose the same package-level
+     `registerDuckDBAggregates(db *sql.DB) error` shape, so `driver.go:208`
+     remains unchanged.
 
-**Invasiveness verdict:** with `go.mod replace`, the emulator changes reduce to **adding ONE new file** (`duckdb_aggregate_udf_purego.go`) **and ONE build tag** on the existing cgo TU. Optionally, also flip `loadSpatialExtension` to a no-op (1 file, ~3 lines, or done inside the compat-aware build via tag). **Net: ~1 new file + 1 build tag + 1 optional no-op edit. The other 10 duckdb-go-touching files compile verbatim.**
+**Invasiveness verdict:** with `go.mod replace`, the emulator changes reduced to
+**adding ONE new file** (`duckdb_aggregate_udf_purego.go`) and archiving the
+existing cgo TU behind `//go:build ignore`. Optionally, also flip
+`loadSpatialExtension` to a no-op (1 file, ~3 lines, or done inside the
+compat-aware build via tag). **Net: ~1 new file + 1 archive tag + 1 optional
+no-op edit. The other 10 duckdb-go-touching files compile verbatim.**
 
 > The same `con.Raw`-based registration path the compat `RegisterScalarUDF`/`RegisterTableUDF` use is also what `duckdb_aggregate_udf_purego.go` uses — they all unwrap `*sql.Conn` → our `*conn` (which exposes `mod`+`con` at `converge/duckdb/driver.go:78-85`), so there is **one** unwrap helper shared across the whole UDF surface.
 
@@ -169,7 +182,9 @@ What ships: emulator compiles & runs CGO_ENABLED=0 on our engine for all queries
 
 Tasks:
 1. Stand up the `duckdbcompat` package skeleton: `Driver` (delegates to `convergeduckdb.Driver`), `Decimal` (`String()`/`Float64()`), `Type`+7 constants, `TypeInfo`/`NewTypeInfo`, and **stub** `RegisterScalarUDF`/`RegisterAggregateUDF`/`RegisterTableUDF` that return `nil` without registering (so registration call sites compile and no-op). Add `go.mod replace`.
-2. Build-tag the cgo aggregate TU; add a no-op `duckdb_aggregate_udf_purego.go` for now.
+2. Archive the cgo aggregate TU behind `//go:build ignore`; add the pure bridge
+   file. The executed branch went past the original no-op stub and now registers
+   real aggregate callbacks through the pure engine.
 3. DSN conformance: confirm `duckdbDSN` (`driver.go:150-165`) output (`""`→in-memory, bare path→file) matches our connector (`converge/duckdb/driver.go:55-62`: `""`→`:memory:`, else path). **Already compatible.**
 4. **Connection-sharing decision (the load-bearing T0 risk — see §4).** Resolve the shared-in-memory-DB requirement.
 5. Scan-type conformance audit: guarantee our typed Scan returns `time.Time` / `*big.Int` (HUGEINT — hot for COUNT/SUM) / `[]any` (LIST) / `map[string]any` (STRUCT) / narrow ints / `[]byte` / **`Decimal`**, mirroring `internal/value/decoder.go`'s switch. Table-driven test.

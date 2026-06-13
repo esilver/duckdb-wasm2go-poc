@@ -1,7 +1,8 @@
 # DuckDB Wasm2Go PoC Repo Map
 
 This repository keeps the active engine path at the top level. Superseded
-scripts, spikes, and stale narrative notes were removed from the tree.
+scripts, spikes, stale narrative notes, and unfiled draft material were removed
+from the tree.
 
 ## Current entry points
 
@@ -9,7 +10,7 @@ scripts, spikes, and stale narrative notes were removed from the tree.
   it also emits and compile-checks the optimized sharded engine layout.
 - `rebuild_parquet.sh`: parquet engine regeneration path for an already-staged
   parquet-flavored `duckdb_fs.wasm`. It is intentionally separate because the
-  parquet wasm build itself is still manual.
+  parquet wasm build itself is still a manual developer lane.
 - `build_fs.sh`: current wasm build script used by `rebuild_fs_all.sh`.
 - `verify_shape.sh`: checks the wasm shape before transpilation.
 - `split_new.py` and `scripts/`: source transforms applied after wasm2go.

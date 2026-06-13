@@ -8,9 +8,9 @@ This repo started as a proof of concept ("can DuckDB survive a trip through
 DuckDB **v1.5.3** compiled to a standalone WebAssembly module, transpiled to
 plain Go, and driven through the DuckDB C API — **`CGO_ENABLED=0`, no cgo, no
 shared libraries, no wasm runtime**. The default lane statically links
-`core_functions`, `json`, and `icu`; the promoted parquet lane also links
-DuckDB's `parquet` extension and proves `read_parquet` plus Parquet round-trip
-I/O locally.
+`core_functions`, `json`, and `icu`. The parquet lane regenerates the Go engine
+from a pre-staged parquet-flavored wasm and locally proves `read_parquet` plus
+Parquet round-trip I/O.
 
 The result is not a toy. It ships as a go-gettable `database/sql` driver
 ([`duckdb-go-pure`](https://github.com/esilver/duckdb-go-pure)), supports
@@ -153,9 +153,12 @@ lanes:
   sharded `genopt` layout.
 - `GENOPT=1 ./rebuild_parquet.sh` consumes a pre-staged parquet-flavored
   `duckdb_fs.wasm`, regenerates the same Go layouts, and compile-checks them.
-  It does not build the parquet wasm itself. The latest local proof
-  (2026-06-13) showed `read_parquet` over a DuckDB fixture and a
-  `COPY ... TO (FORMAT 'parquet')` round trip both working in pure Go.
+  It does not build the parquet wasm itself yet; that build is still a manual
+  developer lane. The latest local proof (2026-06-13) showed `read_parquet`
+  over a DuckDB fixture and a `COPY ... TO (FORMAT 'parquet')` round trip both
+  working in pure Go. Set `DUCKDB_PARQUET_FIXTURE` to point the converge harness
+  at a local fixture outside the default `duckdb-src/data/parquet-testing`
+  checkout path.
 
 The default rebuild command still rebuilds everything from the DuckDB v1.5.3
 sources on this machine class (macOS arm64; the transpile/compile steps want
@@ -196,8 +199,9 @@ engine" in the duckdb-go-pure README.
 ## Repository map
 
 The root is for the current regeneration path only. Superseded scripts,
-spikes, and stale narrative notes were removed; recover them from git history
-only if a specific investigation needs them. A concise file-by-file map is in
+spikes, stale narrative notes, and unfiled draft material were removed; recover
+them from git history only if a specific investigation needs them. A concise
+file-by-file map is in
 [`REPO_MAP.md`](REPO_MAP.md).
 
 ## Credits

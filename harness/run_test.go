@@ -1,3 +1,5 @@
+//go:build harness_generated
+
 package main
 
 import (

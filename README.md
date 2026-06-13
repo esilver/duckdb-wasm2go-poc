@@ -147,6 +147,10 @@ need this repo's pipeline unless you are regenerating the engine.
 The top-level entry points are intentionally limited to the current engine
 lanes:
 
+- `./bootstrap_duckdb.sh` fetches the gitignored DuckDB v1.5.3 inputs required
+  by the build lane: the `libduckdb-src` amalgamation into `amalg/duckdb.cpp`,
+  a sparse `duckdb-src/` checkout for extension/includes/corpus data, and the
+  generated-output directories.
 - `./rebuild_fs_all.sh` builds the host-filesystem DuckDB wasm, regenerates the
   Go engine, and compile-checks the reference layout.
 - `GENOPT=1 ./rebuild_fs_all.sh` also produces and checks the optimized
@@ -160,16 +164,19 @@ lanes:
   at a local fixture outside the default `duckdb-src/data/parquet-testing`
   checkout path.
 
-The default rebuild command still rebuilds everything from the DuckDB v1.5.3
-sources on this machine class (macOS arm64; the transpile/compile steps want
-tens of GB of RAM):
+From a clean clone, bootstrap first, then run the heavy build:
 
 ```sh
+./bootstrap_duckdb.sh
 ./rebuild_fs_all.sh   # build_fs.sh (emcc) -> regen exhost invokes ->
                       # wasm2go -> split_new.py -> go build
                       # GENOPT=1: also transform_genopt.py (shard) ->
                       # split_giant_fns.py (no '-l' needed) -> compile check
 ```
+
+The default rebuild command still rebuilds everything from the DuckDB v1.5.3
+sources on this machine class (macOS arm64; the transpile/compile steps want
+tens of GB of RAM).
 
 Key invariants the scripts encode:
 
@@ -191,10 +198,10 @@ Key invariants the scripts encode:
   (output-corruption bug in v0.3.0–v0.4.6, upstream issue 31), and the
   version used is recorded in `converge/genpkg/TRANSPILER_VERSION`.
 
-Step-by-step detail lives in the current scripts: `build_fs.sh`,
-`rebuild_fs_all.sh`, `rebuild_parquet.sh`, and `verify_shape.sh`. To refresh
-the published library from a new `gen.go`/`gen.dat`, see "Regenerating the
-engine" in the duckdb-go-pure README.
+Step-by-step detail lives in the current scripts: `bootstrap_duckdb.sh`,
+`build_fs.sh`, `rebuild_fs_all.sh`, `rebuild_parquet.sh`, and
+`verify_shape.sh`. To refresh the published library from a new `gen.go` /
+`gen.dat`, see "Regenerating the engine" in the duckdb-go-pure README.
 
 ## Repository map
 

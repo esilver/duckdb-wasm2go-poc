@@ -2,6 +2,7 @@ package duckdb
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 )

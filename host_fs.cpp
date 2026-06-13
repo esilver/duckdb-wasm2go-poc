@@ -297,7 +297,10 @@ public:
 	// already visible; we ask the host to fsync for real durability.
 	void FileSync(FileHandle &handle) override {
 		auto &h = handle.Cast<HostFileHandle>();
-		host_sync(h.fd);
+		int32_t rc = host_sync(h.fd);
+		if (rc < 0) {
+			throw IOException("HostFileSystem: sync failed on \"%s\" (errno %d)", handle.path, (int)-rc);
+		}
 	}
 
 	// ----- seek / position bookkeeping ----------------------------------------

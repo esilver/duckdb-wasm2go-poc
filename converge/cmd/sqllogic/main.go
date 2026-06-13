@@ -271,6 +271,9 @@ func relPath(p string) string {
 // ---------------------------------------------------------------- per-file execution with timeout + recover
 
 func runFileWithTimeout(path string, timeout time.Duration) fileResult {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
 	done := make(chan fileResult, 1)
 	go func() {
 		defer func() {
@@ -284,7 +287,7 @@ func runFileWithTimeout(path string, timeout time.Duration) fileResult {
 					detail: "panic: " + msg + "\n" + stack}
 			}
 		}()
-		done <- executeFile(path)
+		done <- executeFile(ctx, path)
 	}()
 	startT := time.Now()
 	select {
@@ -292,8 +295,10 @@ func runFileWithTimeout(path string, timeout time.Duration) fileResult {
 		res.path = path
 		res.dur = time.Since(startT)
 		return res
-	case <-time.After(timeout):
-		// abandon the goroutine and its engine instance; do NOT reuse / close it
+	case <-ctx.Done():
+		// The context is passed to all driver calls so cooperative engines can
+		// interrupt. If a backend ignores cancellation, the worker may still be
+		// abandoned; do not reuse or close its engine from this goroutine.
 		return fileResult{path: path, outcome: "FAIL", reason: failTimeout,
 			detail: fmt.Sprintf("file exceeded %s", timeout), dur: time.Since(startT)}
 	}
@@ -711,6 +716,7 @@ type haltStop struct{}
 func (haltStop) Error() string { return "halt" }
 
 type execState struct {
+	ctx         context.Context
 	db          *sql.DB
 	conns       map[string]*sql.Conn
 	inTxn       map[string]bool // conn name -> inside explicit BEGIN..COMMIT/ROLLBACK
@@ -740,7 +746,7 @@ type renderCtx struct {
 
 func (st *execState) rctx() renderCtx { return renderCtx{st.tz, st.calendar} }
 
-func executeFile(path string) fileResult {
+func executeFile(ctx context.Context, path string) fileResult {
 	recs, err := parseFile(path)
 	if err != nil {
 		if ps, ok := err.(parseSkip); ok {
@@ -769,6 +775,7 @@ func executeFile(path string) fileResult {
 		return fileResult{outcome: "FAIL", reason: "setup secret_directory", detail: err.Error()}
 	}
 	st := &execState{
+		ctx:         ctx,
 		db:          db,
 		conns:       map[string]*sql.Conn{},
 		inTxn:       map[string]bool{},
@@ -809,13 +816,27 @@ func executeFile(path string) fileResult {
 func (st *execState) execRecords(recs []record, subs []sub) error {
 	for i := range recs {
 		r := &recs[i]
+		if err := st.ctx.Err(); err != nil {
+			return failStop{failTimeout, err.Error(), r.line}
+		}
 		switch r.kind {
 		case recMode:
 			st.skipMode = r.modeArg == "skip"
 		case recHalt:
 			return haltStop{}
 		case recSleep:
-			time.Sleep(r.sleepDur)
+			timer := time.NewTimer(r.sleepDur)
+			select {
+			case <-timer.C:
+			case <-st.ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return failStop{failTimeout, st.ctx.Err().Error(), r.line}
+			}
 		case recResetLabel:
 			// Upstream's ResetLabel command (sqllogic_test_runner.cpp): forget
 			// the label's stored hash so foreach iterations with different
@@ -1025,15 +1046,13 @@ func (st *execState) getConn(name string) (*sql.Conn, error) {
 	if c, ok := st.conns[name]; ok {
 		return c, nil
 	}
-	c, err := st.db.Conn(noCtx)
+	c, err := st.db.Conn(st.ctx)
 	if err != nil {
 		return nil, err
 	}
 	st.conns[name] = c
 	return c, nil
 }
-
-var noCtx = context.Background()
 
 // ---------------------------------------------------------------- statement
 
@@ -1084,7 +1103,7 @@ func (st *execState) execStatement(r *record, subs []sub) error {
 	}
 	var rawErr error
 	for _, part := range parts {
-		if _, rawErr = conn.ExecContext(noCtx, part); rawErr != nil {
+		if _, rawErr = conn.ExecContext(st.ctx, part); rawErr != nil {
 			break
 		}
 		// Track explicit transactions PER PART: a multi-statement record like
@@ -1130,7 +1149,7 @@ func (st *execState) execStatement(r *record, subs []sub) error {
 		// ("cannot start a transaction within a transaction"), which clears
 		// it. This sacrificial ROLLBACK absorbs that one-shot poison.
 		st.autoRollbacks++
-		_, _ = conn.ExecContext(noCtx, "ROLLBACK")
+		_, _ = conn.ExecContext(st.ctx, "ROLLBACK")
 	}
 
 	expErr := st.substitute(strings.Join(r.expected, "\n"), subs)
@@ -1346,7 +1365,7 @@ func (st *execState) execQuery(r *record, subs []sub) error {
 		segs = []string{sqlText}
 	}
 	for _, pre := range segs[:len(segs)-1] {
-		if _, err := conn.ExecContext(noCtx, pre); err != nil {
+		if _, err := conn.ExecContext(st.ctx, pre); err != nil {
 			msg := err.Error()
 			if isInternalError(msg) {
 				return failStop{failInternal, snip(pre) + "\n=> " + msg, r.line}
@@ -1355,7 +1374,7 @@ func (st *execState) execQuery(r *record, subs []sub) error {
 		}
 		st.trackTxn(r.conn, pre) // "BEGIN; SELECT …" query records enter a tx
 	}
-	rows, qErr := conn.QueryContext(noCtx, segs[len(segs)-1])
+	rows, qErr := conn.QueryContext(st.ctx, segs[len(segs)-1])
 	if qErr != nil {
 		msg := qErr.Error()
 		if isInternalError(msg) {

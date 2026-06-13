@@ -148,7 +148,7 @@ limit, bundling `core_functions`, `-DNDEBUG`) are written up in
 |---|---|
 | **this repo** | the engine build pipeline (emcc → wasm2go → Go), the converge host/driver workspace, the sqllogictest runner, and the engineering log |
 | [esilver/duckdb-go-pure](https://github.com/esilver/duckdb-go-pure) | **the library to use**: go-gettable pure-Go DuckDB `database/sql` driver (v0.3.x, fully-optimized engine, flag-free build), transpiled engine committed in-repo |
-| [esilver/googlesqlite](https://github.com/esilver/googlesqlite) | BigQuery/GoogleSQL dialect on the pure-Go engine — 986/994 conformance, plus an interactive REPL ([CLI-PURE-GO.md](https://github.com/esilver/googlesqlite/blob/main/CLI-PURE-GO.md)) |
+| [esilver/googlesqlite](https://github.com/esilver/googlesqlite) | BigQuery/GoogleSQL dialect on the pure-Go engine, with a named spec conformance gate in CI and an interactive REPL ([CLI-PURE-GO.md](https://github.com/esilver/googlesqlite/blob/main/CLI-PURE-GO.md)) |
 | [esilver/bigquery-emulator](https://github.com/esilver/bigquery-emulator/tree/main) | the goccy BigQuery emulator running fully pure-Go, `bq`-CLI acceptance-tested |
 
 If you just want to run SQL from Go, start at **duckdb-go-pure** — you never

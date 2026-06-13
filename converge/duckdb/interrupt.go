@@ -48,6 +48,8 @@ package duckdb
 import (
 	"context"
 	"errors"
+	"log"
+	"sync/atomic"
 	"time"
 )
 
@@ -60,6 +62,14 @@ const interruptedFlagOffset = 16
 // ctx fires, closing the InitialCleanup clear-window (see file comment).
 const interruptRefire = 50 * time.Millisecond
 
+var interruptFallbackLogged atomic.Bool
+
+func logInterruptFallback(reason string) {
+	if interruptFallbackLogged.CompareAndSwap(false, true) {
+		log.Printf("duckdb-go-pure: mid-statement cancellation disabled; interrupt flag validation failed: %s", reason)
+	}
+}
+
 // resolveInterruptFlag computes and VALIDATES the linear-memory address of
 // con's ClientContext.interrupted flag. It must run while the engine is idle
 // (open/connect time, engine lock held): the validation probe calls the real
@@ -68,23 +78,31 @@ const interruptRefire = 50 * time.Millisecond
 // if the layout assumption does not hold on this build.
 func (mod *module) resolveInterruptFlag(con int32) int32 {
 	if con == 0 {
+		logInterruptFallback("connection handle is zero")
 		return 0
 	}
 	ctxPtr := int32(mod.readU32(con))
 	if ctxPtr <= 0 {
+		logInterruptFallback("connection context pointer is zero")
 		return 0
 	}
 	addr := ctxPtr + interruptedFlagOffset
 	mem := mod.mem()
 	if addr <= 0 || int(addr) >= len(mem) {
+		logInterruptFallback("computed interrupt flag address is outside linear memory")
 		return 0
 	}
 	saved := mem[addr]
 	mem[addr] = 0
 	mod.m.Xduckdb_interrupt(con) // ground truth: the engine's own flag write
 	mem = mod.mem()
+	if int(addr) >= len(mem) {
+		logInterruptFallback("validated interrupt flag address moved outside linear memory")
+		return 0
+	}
 	if mem[addr] != 1 {
 		mem[addr] = saved
+		logInterruptFallback("duckdb_interrupt did not flip the expected flag byte")
 		return 0
 	}
 	mem[addr] = saved // restore (= ClientContext::ClearInterrupt)

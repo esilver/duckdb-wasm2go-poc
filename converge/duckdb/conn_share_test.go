@@ -6,7 +6,8 @@ import (
 	"testing"
 )
 
-// TestCrossConnSharing is the gating T0 acceptance test from SWAP-BLUEPRINT.md:
+// TestCrossConnSharing is the gating acceptance test for cross-connection
+// sharing:
 // every connection from one *sql.DB must share ONE underlying in-memory database,
 // so DDL on connection A is visible to a query on connection B. (The googlesqlite
 // emulator hard-assumes this and deliberately does not pin MaxOpenConns(1).)
@@ -48,7 +49,7 @@ func TestCrossConnSharing(t *testing.T) {
 }
 
 // TestSeparateDBsIsolated: two independent sql.Open(":memory:") must NOT share
-// state (each gets its own connector → its own engine), per SWAP-BLUEPRINT §5.10.
+// state (each gets its own connector -> its own engine).
 func TestSeparateDBsIsolated(t *testing.T) {
 	d1, err := sql.Open("duckdb", ":memory:")
 	if err != nil {

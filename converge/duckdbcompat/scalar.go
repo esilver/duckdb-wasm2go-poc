@@ -1,4 +1,4 @@
-// scalar.go — the scalar-UDF façade (SWAP-BLUEPRINT §1.2), API-identical to the
+// scalar.go — the scalar-UDF facade, API-identical to the
 // subset of github.com/duckdb/duckdb-go/v2 the googlesqlite emulator consumes.
 //
 // The emulator declares ~17 structs that implement ScalarFunc implicitly and

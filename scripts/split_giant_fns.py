@@ -286,6 +286,15 @@ def split_function(func_lines, fname, params, rettype):
                 return t
         if re.fullmatch(r'[A-Za-z_]\w*', rhs):
             return infer_type(rhs, seen)
+        # arithmetic / bitwise / shift expr (e.g. "v8 + v9", "v8 << 2"): in the
+        # transpiled Go the operands share a type and that is the result type, so
+        # infer from the leading identifier operand. Excludes logical && / ||
+        # (result is bool, not the operand type) and comparisons (also bool, not
+        # matched here) so they fall through to the loud failure rather than
+        # mis-inferring.
+        mbin = re.match(r'^([A-Za-z_]\w*)\s*(?:<<|>>|&(?!&)|\|(?!\|)|[-+*/%^])', rhs)
+        if mbin:
+            return infer_type(mbin.group(1), seen)
         raise GrammarError('cannot infer type of crossing temporary %s := %s' % (name, rhs))
 
     for name in sorted(crossing):

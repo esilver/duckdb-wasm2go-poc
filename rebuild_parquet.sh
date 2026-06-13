@@ -1,8 +1,9 @@
 #!/bin/zsh
-# Full Tier-2 pipeline: build the host-FS wasm (build_fs.sh) -> regen exhost
-# invokes -> transpile -> split New -> go build. This regenerates the
-# duckdb_fs.wasm flavor the current converge/genpkg is generated from (host
-# filesystem imports + the full C-API export list in exports_arg.txt).
+# Full Tier-2 pipeline: consume a pre-staged parquet-flavored duckdb_fs.wasm
+# -> regen exhost invokes -> transpile -> split New -> go build. This does NOT
+# build the wasm; it aborts if one is not already staged at $WASM. It
+# regenerates the parquet-flavored duckdb_fs.wasm engine (host filesystem
+# imports + the full C-API export list in exports_arg.txt).
 set -eu
 HERE=${0:a:h}
 export PATH="$(go env GOPATH)/bin:/opt/homebrew/bin:$PATH"
@@ -23,8 +24,8 @@ fi
 wasm2go() { go run "github.com/ncruces/wasm2go@$WASM2GO_VERSION" "$@"; }
 # ----------------------------------------------------------------------------
 
-echo "### 1. build wasm (core_functions + host FS, NDEBUG, -Oz)"
-"$HERE/build_fs.sh" "$WASM"
+echo "### 1. require pre-staged parquet wasm (this script does not build it)"
+[[ -f "$WASM" ]] || { echo "stage parquet wasm at $WASM first" 1>&2; exit 1; }
 
 echo "### 2. regen exhost invokes for exact set"
 wasm-objdump -j Import -x "$WASM" 2>/dev/null | grep -oE 'invoke_[A-Za-z]+' | sort -u > /tmp/ra_want.txt
@@ -79,4 +80,4 @@ fi
 echo "### 5. go build (compile check)"
 cd "$HERE/converge"
 time go build -gcflags='duckdbconverge/genpkg=-N -l -c=16' ./...
-echo "### rebuild_fs_all: DONE"
+echo "### rebuild_parquet: DONE"

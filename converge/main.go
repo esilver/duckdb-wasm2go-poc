@@ -194,11 +194,23 @@ type dbHandle struct {
 }
 
 func openConnect(m *core.Module) (dbHandle, error) {
+	// Attach the Tier-2 host filesystem on a config BEFORE open. read_parquet and
+	// COPY reach real host files only through this FS; a plain duckdb_open uses
+	// DuckDB's default FS, which is non-functional under standalone wasm.
+	cfgSlot := allocOut(m, 4)
+	if rc := m.Xduckdb_create_config(cfgSlot); rc != 0 {
+		return dbHandle{}, fmt.Errorf("duckdb_create_config -> state=%d", rc)
+	}
+	cfg := readPtr(m, cfgSlot)
+	m.Xhost_fs_attach_to_config(cfg)
+
 	pathPtr := cstring(m, ":memory:")
 	dbSlot := allocOut(m, 4)
-	if rc := m.Xduckdb_open(pathPtr, dbSlot); rc != 0 {
-		return dbHandle{}, fmt.Errorf("duckdb_open(:memory:) -> state=%d", rc)
+	errSlot := allocOut(m, 4)
+	if rc := m.Xduckdb_open_ext(pathPtr, dbSlot, cfg, errSlot); rc != 0 {
+		return dbHandle{}, fmt.Errorf("duckdb_open_ext(:memory:) -> state=%d", rc)
 	}
+	m.Xduckdb_destroy_config(cfgSlot)
 	db := readPtr(m, dbSlot)
 
 	// Statically register the core_functions extension (sum/avg/min/string fns):
@@ -214,6 +226,8 @@ func openConnect(m *core.Module) (dbHandle, error) {
 	m.Xfree(pathPtr)
 	m.Xfree(dbSlot)
 	m.Xfree(conSlot)
+	m.Xfree(cfgSlot)
+	m.Xfree(errSlot)
 	return dbHandle{db: db, con: con}, nil
 }
 
@@ -323,6 +337,32 @@ func main() {
 			continue
 		}
 		fmt.Printf("%-44s -> value=%d (cols=%d rows=%d)\n", sql, val, cols, rows)
+	}
+
+	// Parquet verification: read_parquet over a corpus fixture exercises the
+	// statically-linked parquet extension's read path in pure Go (CGO_ENABLED=0),
+	// then COPY ... TO verifies hostfs create/write by reading the generated
+	// Parquet file back. The fixture is part of the fetched DuckDB corpus under
+	// duckdb-src (gitignored), so this proof only runs where that corpus has
+	// been cloned locally; missing files print an error instead of failing.
+	{
+		const fixture = "/Users/elisilver/workspace/chicory/duckdb-wasm2go-poc/duckdb-src/data/parquet-testing/simple.parquet"
+		if cnt, _, rows, err := queryInt64(m, h, "SELECT COUNT(*) FROM read_parquet('"+fixture+"')"); err != nil {
+			fmt.Printf("%-44s -> ERROR: %v\n", "PARQUET read_parquet(fixture)", err)
+		} else {
+			fmt.Printf("%-44s -> COUNT=%d rows=%d (read OK if rows>=1)\n", "PARQUET read_parquet(fixture)", cnt, rows)
+		}
+		const pqPath = "/tmp/pqtest_converge.parquet"
+		if _, _, _, err := queryInt64(m, h, "COPY (SELECT 42 AS x) TO '"+pqPath+"' (FORMAT 'parquet')"); err != nil {
+			fmt.Printf("%-44s -> ERROR: %v\n", "PARQUET COPY TO", err)
+		} else {
+			val, _, rows, err := queryInt64(m, h, "SELECT x FROM read_parquet('"+pqPath+"')")
+			if err != nil {
+				fmt.Printf("%-44s -> ERROR: %v\n", "PARQUET read_parquet", err)
+			} else {
+				fmt.Printf("%-44s -> value=%d rows=%d (want 42 / 1)\n", "PARQUET round-trip", val, rows)
+			}
+		}
 	}
 
 	// Breadth: build a table and exercise core_functions aggregates + scalars.

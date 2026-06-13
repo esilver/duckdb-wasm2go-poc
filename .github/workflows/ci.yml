@@ -12,6 +12,10 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v6
+      - name: install zsh
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zsh
       - name: check zsh scripts
         run: |
           zsh -n \

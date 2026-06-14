@@ -8,7 +8,7 @@
 // buffer plus an optional validity bitmask. rows.Next walks rows within the
 // current chunk, fetching the next chunk when the cursor exhausts it.
 //
-// ABI notes (see harness/PLUGIN.md):
+// ABI notes (see harness/HARNESS.md):
 //   - Several accessors (duckdb_column_count/name/logical_type, duckdb_fetch_chunk,
 //     duckdb_destroy_result, ...) take a duckdb_result BY VALUE. Emscripten lowers a
 //     by-value struct argument to a POINTER to the struct, so the generated method

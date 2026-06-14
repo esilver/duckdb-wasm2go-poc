@@ -1,12 +1,13 @@
 # Historical validation harness
 
+> **Status: frozen, superseded by `../converge`** (where the active DuckDB engine
+> now lives). Kept as a runbook for the exception/WASI harness pattern and the
+> live `gen-invokes` helper.
+
 Runs a wasm2go-transpiled, C-API-shaped wasm in **pure Go (`CGO_ENABLED=0`)**.
 Validated end-to-end on `poc.wasm` (a tiny standalone C++ module shaped like the
 DuckDB C API) and on `wasitest/wasiprobe.wasm` (which forces the WASI/libc
 surface).
-
-The active DuckDB engine now lives in `../converge`. This directory is kept for
-the exception/WASI harness pattern and the live `gen-invokes` helper.
 
 ## Re-running
 

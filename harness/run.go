@@ -8,7 +8,7 @@
 //
 // For the validation POC the exported surface is poc.cc's db_open / query_scalar
 // / echo_len. For real DuckDB the SAME flow calls duckdb_open / duckdb_connect /
-// duckdb_query / duckdb_value_int64 (see PLUGIN.md); only the method names and
+// duckdb_query / duckdb_value_int64 (see HARNESS.md); only the method names and
 // the out-param layout change.
 //
 // Build/run: ./build-poc.sh && CGO_ENABLED=0 go run -tags harness_generated .

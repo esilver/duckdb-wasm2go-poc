@@ -3,7 +3,7 @@
 // (the transpiler output, imported here as duckdbconverge/genpkg) to the
 // validated exception host (exhost) and WASI/libc shim (wasishim), then calls
 // duckdb_open / duckdb_connect / duckdb_query /
-// duckdb_value_int64 the way PLUGIN.md prescribes: marshal C-strings into module
+// duckdb_value_int64 the way HARNESS.md prescribes: marshal C-strings into module
 // memory, pass offsets, read scalars back out.
 //
 // This is the convergence payoff: the same harness proven on the standalone
@@ -155,7 +155,7 @@ var (
 	_ core.Xwasi_snapshot_preview1 = (*wasishim.Shim)(nil)
 )
 
-// ---- C-string / memory marshalling (carried over from PLUGIN.md) ------------
+// ---- C-string / memory marshalling (carried over from HARNESS.md) ------------
 
 func cstring(m *core.Module, s string) int32 {
 	ptr := m.Xmalloc(int32(len(s) + 1))

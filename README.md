@@ -18,45 +18,6 @@ filesystem, and large third-party corpora passing (below). The default lane
 statically links `core_functions`, `json`, and `icu`. The parquet lane proves
 `read_parquet` plus Parquet round-trip I/O.
 
-## Results
-
-**DuckDB's own sqllogictest corpus** (`duckdb-src/test/sql/**`), measured
-2026-06-12 with the runner in this repo against `duckdb-go-pure v0.3.13`:
-
-> **2,522 PASS / 9 FAIL / 791 SKIP** of 3,322 files, **99.6% excluding skips**.
-> Every remaining failure is a documented permanent exclusion that behaves
-> byte-identically to the native v1.5.3 CLI, and none is core SQL execution.
-> Skips are unsupported test *directives* (`load` restart,
-> `require parquet/tpch/...`), not engine failures.
-
-The runner ([`converge/cmd/sqllogic`](converge/cmd/sqllogic/README.md)) is a
-standalone Go module implementing DuckDB's sqllogictest dialect (query/statement
-records, sort modes, md5, loops, skipif/onlyif, float epsilon). It imports the
-published driver, so a fresh checkout reruns the corpus without committing
-generated engine packages. Per-failure root causes:
-[`KNOWN-LIMITS.md`](converge/cmd/sqllogic/KNOWN-LIMITS.md).
-
-**BigQuery dialect conformance** is owned downstream by
-[`googlesqlite`](https://github.com/esilver/googlesqlite), which gates a named
-spec-conformance suite in CI against this engine. Read current per-spec and
-per-case coverage from its README and generated matrix rather than here:
-[REPRODUCE-PURE-GO.md](https://github.com/esilver/googlesqlite/blob/main/REPRODUCE-PURE-GO.md).
-
-**Pure-Go BigQuery emulator.**
-[`bigquery-emulator`](https://github.com/esilver/bigquery-emulator/tree/main)
-builds out of the box from a fresh clone with `CGO_ENABLED=0` (one `go.mod`
-`replace` pointing `goccy/googlesqlite` at the pure-Go fork), acceptance-tested
-end-to-end against the running emulator with the real `bq` CLI.
-
-**Performance.** This route delivers pure-Go DuckDB *semantics* first. The
-optimized layout (`-tags genopt` here, flag-free in `duckdb-go-pure` since
-v0.3.x) compiles fully optimized and runs **2.3-2.9x faster** than the no-opt
-reference, and unlocked `GOOS=js`/browser builds. It shards the transpiled
-engine across packages and splits the giant functions so the Go compiler can
-optimize each piece. The structural gap vs native DuckDB is SIMD: wasm2go has
-none, so the wasm is built `-mno-simd128`. Mechanism and RAM profile:
-[`module_engine_genopt.go`](converge/duckdb/module_engine_genopt.go).
-
 ## How it works
 
 ```
@@ -88,15 +49,6 @@ Three host-side ideas make it real:
    DuckDB `call_indirect`s straight back into Go. This makes vectorized scalar
    and aggregate UDFs work with no C involved.
 
-## The repo family
-
-| Repo | What it is |
-|---|---|
-| **this repo** | the engine build pipeline (emcc → wasm2go → Go), the converge host/driver workspace, the sqllogictest runner, the engineering log |
-| [duckdb-go-pure](https://github.com/esilver/duckdb-go-pure) | **the library to use**: go-gettable pure-Go DuckDB `database/sql` driver (v0.3.x, fully-optimized engine, flag-free build, transpiled engine committed in-repo) |
-| [googlesqlite](https://github.com/esilver/googlesqlite) | BigQuery/GoogleSQL dialect on the pure-Go engine, with a CI spec-conformance gate and a REPL ([REPRODUCE-PURE-GO.md](https://github.com/esilver/googlesqlite/blob/main/REPRODUCE-PURE-GO.md)) |
-| [bigquery-emulator](https://github.com/esilver/bigquery-emulator/tree/main) | the goccy BigQuery emulator running fully pure-Go, `bq`-CLI acceptance-tested |
-
 ## Reproducing the engine
 
 From a clean clone, bootstrap the gitignored DuckDB v1.5.3 inputs, then run the
@@ -117,6 +69,14 @@ a `COPY ... TO (FORMAT 'parquet')` round trip both work in pure Go. Point
 `DUCKDB_PARQUET_FIXTURE` at a fixture outside the default
 `duckdb-src/data/parquet-testing` path. The full rebuild wants tens of GB of RAM
 (macOS arm64).
+
+The `GENOPT=1` layout is also what makes performance and browser builds work.
+It shards the transpiled engine across packages and splits the giant functions
+so the Go compiler can optimize each piece (compiler memory is per-package),
+which compiles fully optimized, runs **2.3-2.9x faster** than the no-opt
+reference, and unlocked `GOOS=js`/browser builds. The structural gap vs native
+DuckDB is SIMD: wasm2go has none, so the wasm is built `-mno-simd128`. Mechanism
+and RAM profile: [`module_engine_genopt.go`](converge/duckdb/module_engine_genopt.go).
 
 Invariants the scripts encode:
 
@@ -139,6 +99,44 @@ Step-by-step detail lives in the scripts themselves: `bootstrap_duckdb.sh`,
 `build_fs.sh`, `rebuild_fs_all.sh`, `rebuild_parquet.sh`, `verify_shape.sh`. To
 refresh the published library from a new `gen.go`/`gen.dat`, see "Regenerating
 the engine" in the duckdb-go-pure README.
+
+## Results
+
+**DuckDB's own sqllogictest corpus** (`duckdb-src/test/sql/**`), measured
+2026-06-12 with the runner in this repo against `duckdb-go-pure v0.3.13`:
+
+> **2,522 PASS / 9 FAIL / 791 SKIP** of 3,322 files, **99.6% excluding skips**.
+> Every remaining failure is a documented permanent exclusion that behaves
+> byte-identically to the native v1.5.3 CLI, and none is core SQL execution.
+> Skips are unsupported test *directives* (`load` restart,
+> `require parquet/tpch/...`), not engine failures.
+
+The runner ([`converge/cmd/sqllogic`](converge/cmd/sqllogic/README.md)) is a
+standalone Go module implementing DuckDB's sqllogictest dialect (query/statement
+records, sort modes, md5, loops, skipif/onlyif, float epsilon). It imports the
+published driver, so a fresh checkout reruns the corpus without committing
+generated engine packages. Per-failure root causes:
+[`KNOWN-LIMITS.md`](converge/cmd/sqllogic/KNOWN-LIMITS.md).
+
+**BigQuery dialect conformance** is owned downstream by
+[`googlesqlite`](https://github.com/esilver/googlesqlite). Read its per-spec and
+per-case coverage there, not here.
+
+**Pure-Go BigQuery emulator** coverage lives with
+[`bigquery-emulator`](https://github.com/esilver/bigquery-emulator/tree/main),
+which builds out of the box from a fresh clone with `CGO_ENABLED=0`.
+
+**Performance.** The optimized layout runs **2.3-2.9x faster** than the no-opt
+reference (mechanism in "Reproducing the engine" above).
+
+## The repo family
+
+| Repo | What it is |
+|---|---|
+| **this repo** | the engine build pipeline (emcc → wasm2go → Go), the converge host/driver workspace, the sqllogictest runner, the engineering log |
+| [duckdb-go-pure](https://github.com/esilver/duckdb-go-pure) | **the library to use**: go-gettable pure-Go DuckDB `database/sql` driver (v0.3.x, fully-optimized engine, flag-free build, transpiled engine committed in-repo) |
+| [googlesqlite](https://github.com/esilver/googlesqlite) | BigQuery/GoogleSQL dialect on the pure-Go engine, with a CI spec-conformance gate and a REPL ([REPRODUCE-PURE-GO.md](https://github.com/esilver/googlesqlite/blob/main/REPRODUCE-PURE-GO.md)) |
+| [bigquery-emulator](https://github.com/esilver/bigquery-emulator/tree/main) | the goccy BigQuery emulator running fully pure-Go, `bq`-CLI acceptance-tested |
 
 ## Repository map
 

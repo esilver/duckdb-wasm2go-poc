@@ -1,10 +1,8 @@
 // Package exhost is a reusable Go implementation of the Emscripten "legacy"
 // (opcode-free) C++ exception ABI that a wasm2go-transpiled module imports from
-// "env". It generalizes the ~108-LOC host proven in probe T1
-// (/tmp/wasm2go-duckdb-probe/t1/cpp/host.go) to the full surface a real
-// DuckDB -fexceptions build needs.
+// "env". It covers the full surface a real DuckDB -fexceptions build needs.
 //
-// Division of labor (the same one T1 proved):
+// Division of labor:
 //   - The compiled C++ wraps every potentially-throwing INDIRECT call in an
 //     invoke_<sig> trampoline that is a HOST function. The trampoline performs
 //     the indirect call; if a C++ exception propagates it records the "threw"
@@ -19,9 +17,9 @@
 //     just hands back the in-flight exception pointer and publishes the matched
 //     type id into tempRet0, exactly as Emscripten's JS glue does.
 //
-// Reuse: the exception-state machine, the invoke trampoline recover pattern,
+// Core: the exception-state machine, the invoke trampoline recover pattern,
 // __cxa_throw/find_matching_catch_2,3/begin_catch/end_catch/resumeException,
-// llvm_eh_typeid_for and the tempRet0 plumbing are lifted from T1. New here:
+// llvm_eh_typeid_for and the tempRet0 plumbing. Beyond that core:
 // the full invoke arity matrix (invokes.go, generated), the find_matching_catch
 // 4/5 variants, rethrow/primary-exception/uncaught-exceptions, the longjmp
 // import, getTempRet0/setTempRet0 imports, and RTTI delegation through an
@@ -176,7 +174,7 @@ func (h *Host) top() (excRecord, bool) {
 
 // trampoline runs do() (the wrapped indirect call) and, on a thrown C++
 // exception, sets the module threw flag and reports threw=true. Non-throw Go
-// panics propagate unchanged. This is the recover pattern proven in T1,
+// panics propagate unchanged. This is the recover pattern,
 // factored out so every invoke_ arity shares it.
 func (h *Host) trampoline(do func()) {
 	defer func() {
@@ -195,7 +193,7 @@ func (h *Host) trampoline(do func()) {
 // ---- C++ exception ABI (non-invoke) ---------------------------------------
 
 // X__cxa_throw(ptr, typeinfo, dtor): record the in-flight exception and unwind
-// to the active invoke_ trampoline via panic. (T1)
+// to the active invoke_ trampoline via panic.
 func (h *Host) X__cxa_throw(ptr, typ, dtor int32) {
 	h.logf("__cxa_throw ptr=%d typ=%d dtor=%d", ptr, typ, dtor)
 	h.inflight = append(h.inflight, excRecord{exc: ptr, typ: typ})
@@ -215,7 +213,7 @@ func (h *Host) X__cxa_rethrow() {
 	panic(thrownPanic{exc: rec.exc, typ: rec.typ})
 }
 
-// X__resumeException(ptr): no catch clause matched; keep unwinding. (T1)
+// X__resumeException(ptr): no catch clause matched; keep unwinding.
 func (h *Host) X__resumeException(ptr int32) {
 	rec, _ := h.top()
 	h.logf("__resumeException ptr=%d", ptr)
@@ -306,7 +304,7 @@ func (h *Host) X__cxa_find_matching_catch_5(t0, t1, t2 int32) int32 {
 }
 
 // Xllvm_eh_typeid_for(typeinfo): stable nonzero id, must agree with the id
-// find_matching_catch published for the same type. (T1)
+// find_matching_catch published for the same type.
 func (h *Host) Xllvm_eh_typeid_for(typ int32) int32 {
 	id := h.typeID(typ)
 	h.logf("llvm_eh_typeid_for typ=%d -> %d", typ, id)
@@ -315,7 +313,7 @@ func (h *Host) Xllvm_eh_typeid_for(typ int32) int32 {
 
 // X__cxa_begin_catch(ptr): enter a catch; the exception stops being uncaught.
 // Returns the adjusted object pointer (the wasm passes the header; the simple
-// path returns it unchanged, matching T1). (T1)
+// path returns it unchanged).
 func (h *Host) X__cxa_begin_catch(ptr int32) int32 {
 	if h.uncaught > 0 {
 		h.uncaught--
@@ -324,7 +322,7 @@ func (h *Host) X__cxa_begin_catch(ptr int32) int32 {
 	return ptr
 }
 
-// X__cxa_end_catch(): leave the catch, popping the handled exception. (T1)
+// X__cxa_end_catch(): leave the catch, popping the handled exception.
 func (h *Host) X__cxa_end_catch() {
 	if n := len(h.inflight); n > 0 {
 		h.inflight = h.inflight[:n-1]

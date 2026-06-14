@@ -108,9 +108,8 @@ arity matrix + the `__cxa_*` surface). For the rest:
   go run ./gen-invokes -names "$names" -o exhost/invokes.go
   ```
   (The default baseline is a finite superset: all-i32 args 0..16 + single-wide-
-  arg sigs, 400 trampolines. `-names` pins it to DuckDB's exact set, matching
-  the ~205-import shape T1 measured: ~182 i32-ret, ~16 f64-ret, ~5 f32-ret, rest
-  void.)
+  arg sigs, 400 trampolines. `-names` pins it to DuckDB's exact set, the
+  ~205-import shape: ~182 i32-ret, ~16 f64-ret, ~5 f32-ret, rest void.)
 - If a NEW import appears that is neither (e.g. a syscall not yet stubbed), add a
   method to `wasishim.Shim` named `X<importname>` returning ENOSYS and logging.
   An in-memory `SELECT 1` should hit **zero** stubbed paths (`shim.Log` empty),

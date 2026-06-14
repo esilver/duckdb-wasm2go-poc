@@ -1,16 +1,12 @@
-// appender.go — bulk-ingestion Appender (the DuckDB Appender shape, issue #1 lever 2).
+// appender.go - bulk-ingestion Appender (the DuckDB Appender shape).
 //
-// WHY NOT duckdb_appender_create: this wasm build's export list (exports_arg.txt)
-// carries the duckdb_append_* VALUE family (append_int64/double/varchar/...) but
-// NONE of the appender lifecycle symbols — duckdb_appender_create / _end_row /
-// _flush / _close / _destroy / _error are absent from the generated engine, so a
-// handle can never be obtained and the value family is unreachable. (Verified:
-// `grep -c appender converge/genpkg/gen.go` == 0.)
-//
-// INSTEAD the Appender is backed by a registered Go TABLE FUNCTION (that C-API
-// family IS fully exported and uses the same proven inject/call_indirect
-// trampoline as the scalar/aggregate UDFs): AppendRow buffers rows in Go, and
-// Flush executes
+// This Appender is backed by a registered Go TABLE FUNCTION. The C-API appender
+// lifecycle symbols (duckdb_appender_create / _end_row / _flush / _close /
+// _destroy / _error) are absent from this wasm build's export list, so a handle
+// can never be obtained and the duckdb_append_* value family is unreachable
+// (verify with `grep -c appender converge/genpkg/gen.go` == 0). The table-function
+// C-API family is fully exported and uses the same inject/call_indirect trampoline
+// as the scalar/aggregate UDFs. AppendRow buffers rows in Go, and Flush executes
 //
 //	INSERT INTO <table> SELECT * FROM "<feed-fn>"()
 //

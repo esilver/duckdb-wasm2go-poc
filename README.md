@@ -12,7 +12,7 @@ shared libraries, no wasm runtime**. The default lane statically links
 from a pre-staged parquet-flavored wasm and locally proves `read_parquet` plus
 Parquet round-trip I/O.
 
-The result is not a toy. It ships as a go-gettable `database/sql` driver
+The result is a usable engine. It ships as a go-gettable `database/sql` driver
 ([`duckdb-go-pure`](https://github.com/esilver/duckdb-go-pure)), supports
 scalar and aggregate UDFs written as Go closures, persists databases to the
 host filesystem, and passes large third-party test corpora (numbers below).
@@ -136,7 +136,7 @@ module, no `dylink.0`, no GOT imports, no SIMD, and no EH-proposal opcodes.
 |---|---|
 | **this repo** | the engine build pipeline (emcc → wasm2go → Go), the converge host/driver workspace, the sqllogictest runner, and the engineering log |
 | [esilver/duckdb-go-pure](https://github.com/esilver/duckdb-go-pure) | **the library to use**: go-gettable pure-Go DuckDB `database/sql` driver (v0.3.x, fully-optimized engine, flag-free build), transpiled engine committed in-repo |
-| [esilver/googlesqlite](https://github.com/esilver/googlesqlite) | BigQuery/GoogleSQL dialect on the pure-Go engine, with a named spec conformance gate in CI and an interactive REPL ([CLI-PURE-GO.md](https://github.com/esilver/googlesqlite/blob/main/CLI-PURE-GO.md)) |
+| [esilver/googlesqlite](https://github.com/esilver/googlesqlite) | BigQuery/GoogleSQL dialect on the pure-Go engine, with a named spec conformance gate in CI and an interactive REPL (see [REPRODUCE-PURE-GO.md](https://github.com/esilver/googlesqlite/blob/main/REPRODUCE-PURE-GO.md)) |
 | [esilver/bigquery-emulator](https://github.com/esilver/bigquery-emulator/tree/main) | the goccy BigQuery emulator running fully pure-Go, `bq`-CLI acceptance-tested |
 
 If you just want to run SQL from Go, start at **duckdb-go-pure** — you never

@@ -7,12 +7,6 @@ libduckdb-src.zip
 # Shallow upstream clone, used only to inspect scripts
 /duckdb/
 
-# Standalone wasm variants.
-duckdb_core.wasm
-
-# Old standalone wasm2go output location.
-duckdb_core_gen.go
-
 # macOS cruft
 .DS_Store
 .gocache/
@@ -20,25 +14,19 @@ duckdb_core_gen.go
 # ---- Runnable PoC: regenerable large artifacts (rebuild via rebuild_fs_all.sh) ----
 # All standalone wasm variants (-Oz, -O2, gc, core_functions, wasm-opt, ...)
 *.wasm
-duckdb_core.wasm.trackB
 # wasm2go output (transpiled Go) + its embedded data
 converge/genpkg/
 converge/genopt/
-converge_c/genpkg/
 *_gen.go
 *.dat
 # Compiled driver binaries (~195 MB each)
 converge/duckdb_run_*
-converge_c/duckdb_run_*
 # DuckDB v1.5.3 source clone (405 MB; git clone --depth 1 --branch v1.5.3 ...)
 duckdb-src/
-# Scratch second module dir used during build orchestration
-converge_c/
 
 # More regenerable artifacts (Tier2 host-FS + compiled demo/test binaries)
 converge/fsgenpkg/
 converge/duckdb_demo
-converge/duckdb_run_*
 converge/*.test
 converge/fstest/fstest
 converge/fstest/*.test

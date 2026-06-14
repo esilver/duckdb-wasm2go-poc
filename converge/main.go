@@ -273,39 +273,6 @@ func queryInt64(m *core.Module, h dbHandle, sql string) (int64, int64, int64, er
 	return val, cols, rows, nil
 }
 
-// diagQuery runs one statement and dumps state, the error char* pointer, and the
-// first bytes at that pointer, to find why error strings come back empty / DDL fails.
-func diagQuery(m *core.Module, h dbHandle, sql string) {
-	sqlPtr := cstring(m, sql)
-	resPtr := allocOut(m, sizeofDuckdbResult)
-	rc := m.Xduckdb_query(h.con, sqlPtr, resPtr)
-	m.Xfree(sqlPtr)
-	if rc == 0 {
-		cols := m.Xduckdb_column_count(resPtr)
-		rows := m.Xduckdb_row_count(resPtr)
-		var val int64
-		if cols > 0 && rows > 0 {
-			val = m.Xduckdb_value_int64(resPtr, 0, 0)
-		}
-		fmt.Printf("DIAG ok    %-32s state=0 cols=%d rows=%d val=%d\n", sql, cols, rows, val)
-	} else {
-		errPtr := m.Xduckdb_result_error(resPtr)
-		mem := *m.Xmemory().Slice()
-		var raw string
-		if errPtr > 0 && int(errPtr) < len(mem) {
-			end := errPtr
-			for int(end) < len(mem) && mem[end] != 0 && end-errPtr < 120 {
-				end++
-			}
-			raw = string(mem[errPtr:end])
-		}
-		// also dump the result error type accessor if present
-		fmt.Printf("DIAG ERR   %-32s state=%d errPtr=%d msg=%q\n", sql, rc, errPtr, raw)
-	}
-	m.Xduckdb_destroy_result(resPtr)
-	m.Xfree(resPtr)
-}
-
 // queryStr runs sql and returns the (col0,row0) value as a string via
 // duckdb_value_varchar (a duckdb-allocated char* read out of module memory).
 func queryStr(m *core.Module, h dbHandle, sql string) (string, error) {

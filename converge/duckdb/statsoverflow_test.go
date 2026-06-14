@@ -6,7 +6,7 @@ import (
 )
 
 // TestStatsRangeOverflowCaught covers the exhost catch-all/typed-clause id
-// collision (KNOWN-LIMITS class J). CompressedMaterialization's
+// collision. CompressedMaterialization's
 // GetIntegralRangeValue evaluates `stats_max - stats_min` through
 // ExpressionExecutor::TryEvaluateScalar, whose landing pad is
 //

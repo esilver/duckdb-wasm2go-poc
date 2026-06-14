@@ -60,3 +60,13 @@ main.go):
   `converge/genopt/` are intentionally gitignored and regenerated or staged
   locally.
 - `.gocache/` is local cache only.
+
+## Engine seam: three names, one thing
+
+At the driver-to-engine seam, one generated engine wears three names. The
+default-build engine in `converge/genpkg/gen.go` declares `package duckdbcore`,
+is imported by its directory path `duckdbconverge/genpkg` (so call sites and
+comments say "genpkg"), and is aliased to `engineModule` in
+`converge/duckdb/module_engine_genpkg.go` for the rest of the driver. So
+`duckdbcore` (package name), `genpkg` (import path / dir), and `engineModule`
+(driver-side alias) all point at the same package.

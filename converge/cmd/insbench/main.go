@@ -50,7 +50,7 @@ func main() {
 	path := flag.String("path", "exec", "load path: exec (prepared per-row Exec in one tx) | appender (duckdb.Appender, one flush)")
 	gcMode := flag.String("gc", "default", "GC posture: default | gogc400 | memlimit (GOGC=off + 4GiB soft limit)")
 	rows := flag.Int("rows", 3000, "timed row count")
-	dsn := flag.String("dsn", "", "DSN; default is a fresh file DB in TMPDIR (issue phase B shape)")
+	dsn := flag.String("dsn", "", "DSN; default is a fresh file DB in TMPDIR (the phase-B insertAll shape from the header)")
 	flag.Parse()
 
 	switch *gcMode {
@@ -103,8 +103,8 @@ func main() {
 		float64(el.Microseconds())/1000.0/float64(*rows))
 }
 
-// loadExec is the issue's phase-B repository shape: one transaction, one
-// prepared INSERT, n single-row Execs.
+// loadExec reproduces the phase-B repository shape described in the file
+// header: one transaction, one prepared INSERT, n single-row Execs.
 func loadExec(db *sql.DB, base, n int) {
 	tx, err := db.Begin()
 	must(err, "begin")

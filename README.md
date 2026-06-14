@@ -60,40 +60,16 @@ running emulator.
 
 ### Performance
 
-This route delivers pure-Go DuckDB semantics first; speed is now respectable
-rather than painful. The **optimized engine layout** (`-tags genopt` in this
-workspace; what `duckdb-go-pure` ships since v0.3.x) compiles **fully
-optimized** — no `-N`, no `-l` — runs queries **2.3–2.9× faster** than the
-no-opt reference build, and is what made `GOOS=js`/browser builds possible at
-all. The remaining structural gap vs native DuckDB is SIMD: wasm2go has no
-SIMD support, so the wasm is built `-mno-simd128`.
-
-**How the optimized engine works:** two transforms run via
-`GENOPT=1 ./rebuild_fs_all.sh`: a multi-package shard
-([scripts/transform_genopt.py](scripts/transform_genopt.py), step 4c) — the
-42.5k generated `fnNNN` methods become free functions across
-`converge/genopt/{core,shardNN}` (cross-shard calls through `TBL_FnN`
-func-vars), so the Go optimizer runs per-package — followed by a function
-splitter ([scripts/split_giant_fns.py](scripts/split_giant_fns.py), step 4d)
-that splits every >8k-line transpiled function (4k in shard20) into
-semantically identical part-functions, which keeps the inliner's IR bounded.
-With both, every genopt package compiles **fully optimized, no `-l`**
-(0.4–3.4GB peak per package vs >50GB OOM before) and queries run
-**2.3–2.9× faster** than the `-N -l` build of the same source (1.9× on the
-sqllogictest corpus wall clock). In this workspace the engine is selected
-with `-tags genopt` alone (see
-[`converge/duckdb/module_engine_genopt.go`](converge/duckdb/module_engine_genopt.go));
-`-gcflags='duckdbconverge/genopt/...=-c=1'` is **optional** RAM bounding for
-the compile, not a requirement. Note the transform
-runs on the **pre-inline** transpile: the step-4b textual inliner pre-expands
-the IR at source level, which OOMs the optimizer the same way (>28GB
-observed) — the two optimizations do not compose. The splitter is also what
-makes `GOOS=js` builds possible at all: the largest function (36.5k lines)
-exceeded the Go compiler's 65536-SSA-block hard cap. The monolithic `genpkg`
-(default tag, textually inlined, `-N -l`) remains the reference engine. The
-optimized layout ships as `duckdb-go-pure` and is current through
-**v0.3.13** — flag-free for consumers since v0.3.1 (plain `go build`, no
-tags, no gcflags).
+This route delivers pure-Go DuckDB semantics first. The **optimized engine
+layout** (`-tags genopt` here, what `duckdb-go-pure` ships flag-free since
+v0.3.x) compiles fully optimized and runs queries **2.3-2.9x faster** than the
+no-opt reference build, which also made `GOOS=js`/browser builds possible. It
+gets there by sharding the transpiled engine across packages and splitting the
+giant functions so the Go compiler can optimize each piece. The mechanism, RAM
+profile, and version history live in
+[`converge/duckdb/module_engine_genopt.go`](converge/duckdb/module_engine_genopt.go).
+The remaining structural gap vs native DuckDB is SIMD: wasm2go has no SIMD
+support, so the wasm is built `-mno-simd128`.
 
 ## How it works
 

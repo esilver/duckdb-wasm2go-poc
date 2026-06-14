@@ -1,5 +1,6 @@
-// exotic.go — decode + DuckDB-exact VARCHAR rendering for the "exotic" scalar
-// types the flat codec previously dropped to NULL, plus the VARIANT container:
+// exotic.go owns the "exotic" scalar types: those whose physical storage is a
+// blob or hugeint that needs type-specific decoding to reproduce DuckDB's exact
+// VARCHAR text, plus the VARIANT container. The flat codec renders the rest.
 //
 //   - BIGNUM (duckdb_type 35, physical VARCHAR): a varint blob — 3-byte header
 //     (sign bit + data-byte count) followed by big-endian magnitude bytes, all

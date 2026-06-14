@@ -174,8 +174,6 @@ var (
 	_ driver.Pinger             = (*conn)(nil)
 )
 
-// Prepare implements driver.Conn.
-
 // guardEnginePanic converts a Go panic escaping the wasm engine (a transpiled-
 // engine fault or a corrupted-state dereference) into a plain error. Without it
 // the panic unwinds through database/sql's internals, which have no recover of

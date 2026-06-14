@@ -1,17 +1,19 @@
-// insbench reproduces issue #1's phase-B INSERT shape against the pure-Go DuckDB
-// driver and measures the two unowned levers:
+// insbench is the INSERT-throughput benchmark for the pure-Go DuckDB driver. The
+// shape it reproduces is "phase-B": the per-row prepared-INSERT storage-write
+// load from the bigquery-emulator insertAll path, where profiling found the two
+// app-side levers below dominating cost (the engine itself is not the lever):
 //
-//   - GC churn (lever 3): runtime.madvise was 26% of phase-B cycles. The -gc flag
-//     applies a GC posture INSIDE the binary (debug.SetGCPercent /
-//     debug.SetMemoryLimit) so each configuration is self-contained — run the
-//     binary once per configuration, no env vars needed.
-//   - Appender (lever 2): -path=appender loads the same table through
-//     duckdb.NewAppender (buffer all rows, one Flush) instead of per-row
-//     prepared exec, the headline comparison.
+//   - GC churn: runtime.madvise was 26% of phase-B cycles. The -gc flag applies
+//     a GC posture INSIDE the binary (debug.SetGCPercent / debug.SetMemoryLimit)
+//     so each configuration is self-contained. Run the binary once per
+//     configuration, no env vars needed.
+//   - Appender: -path=appender loads the same table through duckdb.NewAppender
+//     (buffer all rows, one Flush) instead of per-row prepared exec, the
+//     headline comparison.
 //
-// Shape mirrors the issue's harness: table t(id BIGINT, grp BIGINT, val DOUBLE)
+// Shape: table t(id BIGINT, grp BIGINT, val DOUBLE)
 // (BigQuery INT64/INT64/FLOAT64), file-backed DB, 50-row warmup outside the
-// timed region, then 3,000 timed rows — exec path inside one transaction with
+// timed region, then 3,000 timed rows, exec path inside one transaction with
 // one prepared statement (the bigquery-emulator insertAll repository shape).
 //
 // Usage:

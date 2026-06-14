@@ -1,5 +1,7 @@
 // Package duckdb is a pure-Go (CGO_ENABLED=0) database/sql driver for DuckDB,
-// driving the wasm2go-transpiled engine (package duckdbcore) through its C API.
+// driving the wasm2go-transpiled engine through its C API. The engine package
+// is reached only through the engineModule alias (module_engine_genpkg.go for
+// the default genpkg build, module_engine_genopt.go under -tags genopt).
 // This file is the shared foundation: module/connection lifecycle, the exception
 // host + WASI shim wiring, and low-level wasm-memory marshalling helpers that
 // driver.go (the database/sql surface) and result.go (chunk/type reading) build on.

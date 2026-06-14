@@ -1,7 +1,8 @@
 // Command duckdbconverge drives the REAL DuckDB C-API wasm, transpiled to pure
 // Go by wasm2go, entirely under CGO_ENABLED=0. It wires the generated *Module
-// (package duckdbcore) to the validated exception host (exhost) and WASI/libc
-// shim (wasishim), then calls duckdb_open / duckdb_connect / duckdb_query /
+// (the transpiler output, imported here as duckdbconverge/genpkg) to the
+// validated exception host (exhost) and WASI/libc shim (wasishim), then calls
+// duckdb_open / duckdb_connect / duckdb_query /
 // duckdb_value_int64 the way PLUGIN.md prescribes: marshal C-strings into module
 // memory, pass offsets, read scalars back out.
 //

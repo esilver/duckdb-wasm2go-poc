@@ -4,6 +4,19 @@ This repository keeps the active engine path at the top level. Superseded
 scripts, spikes, stale narrative notes, and unfiled draft material were removed
 from the tree.
 
+## Vocabulary
+
+These terms recur in code comments (cmd/demo, fstest, module.go, wasishim,
+main.go):
+
+- **Tier 1**: the in-memory `database/sql` driver surface.
+- **Tier 2**: host-filesystem persistence (file-backed databases, reading files
+  off disk) through the WASI filesystem shim.
+- **Path B**: the custom DuckDB `FileSystem` route compiled into the wasm
+  (`host_fs.cpp`), whose virtuals call `env.host_*` imports that
+  `wasishim/hostfs.go` services against the real OS. It is how Tier 2 reaches
+  the host.
+
 ## Current entry points
 
 - `rebuild_fs_all.sh`: current host-filesystem engine rebuild. With `GENOPT=1`
@@ -15,7 +28,18 @@ from the tree.
   parquet wasm build itself is still a manual developer lane.
 - `build_fs.sh`: current wasm build script used by `rebuild_fs_all.sh`.
 - `verify_shape.sh`: checks the wasm shape before transpilation.
-- `split_new.py` and `scripts/`: source transforms applied after wasm2go.
+- Python source transforms applied to the wasm2go output:
+  - `split_new.py`: chunks the one-function table init that overflows the Go
+    compiler's liveness bitmap into many small helper methods.
+  - `scripts/inline_helpers.py`: textually inlines the hot wasm memory helpers
+    (load32/store32/i32) so the `-N -l` genpkg build stops paying a Go call per
+    memory access.
+  - `scripts/transform_genopt.py`: shards the `fnNNN` methods across
+    `converge/genopt/{core,shardNN}` so each package is small enough to compile
+    fully optimized (Go compiler memory is per-package).
+  - `scripts/split_giant_fns.py`: splits transpiled functions over a line
+    threshold so they stay under the Go compiler's 65536-SSA-block cap and the
+    genopt inliner's IR stays bounded.
 - `host_fs.cpp`, `register_core_functions.cpp`, `exports_arg.txt`: C++ inputs
   used by the current wasm build.
 - `converge/`: Go host, driver surface, generated-engine selectors, tests, and
@@ -24,7 +48,11 @@ from the tree.
   trampoline wrappers for a wasm import set.
 - `harness/`: historical exception/WASI validation harness plus the live
   `gen-invokes` helper. Its runnable demo requires `./build-poc.sh` and the
-  `harness_generated` build tag.
+  `harness_generated` build tag. `harness/` is excluded from `go.work`.
+- `harness/exhost` and `harness/wasishim`: frozen snapshots from the validation
+  era, not maintained copies. The live versions the engine actually builds
+  against are `converge/exhost` and `converge/wasishim`, which have since
+  diverged from these forks.
 
 ## Generated or local-only material
 

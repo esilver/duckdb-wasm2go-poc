@@ -1,7 +1,8 @@
-// bindstress is the regression harness for the "bind_varchar runaway": under
-// storage-write load (thousands of prepared INSERT executions binding string
-// params), the engine was observed to spin forever inside a transpiled hash-
-// table walk (load32 loop over a corrupted libc++ unordered_map bucket chain).
+// bindstress is the regression harness for a hang we call the "bind_varchar
+// runaway": under storage-write load (thousands of prepared INSERT executions
+// binding string params), the engine was observed to spin forever inside a
+// transpiled hash-table walk (load32 loop over a corrupted libc++
+// unordered_map bucket chain).
 //
 // Two modes:
 //

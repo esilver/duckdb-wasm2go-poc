@@ -119,7 +119,7 @@ generated engine packages. Per-failure root causes:
 [`KNOWN-LIMITS.md`](converge/cmd/sqllogic/KNOWN-LIMITS.md).
 
 **BigQuery dialect conformance** is owned downstream by
-[`googlesqlite`](https://github.com/esilver/googlesqlite). Read its per-spec and
+[`googlesql-duckdb`](https://github.com/esilver/googlesql-duckdb). Read its per-spec and
 per-case coverage there, not here.
 
 **Pure-Go BigQuery emulator** coverage lives with
@@ -135,7 +135,7 @@ reference (mechanism in "Reproducing the engine" above).
 |---|---|
 | **this repo** | the engine build pipeline (emcc → wasm2go → Go), the converge host/driver workspace, the sqllogictest runner, the engineering log |
 | [duckdb-go-pure](https://github.com/esilver/duckdb-go-pure) | **the library to use**: go-gettable pure-Go DuckDB `database/sql` driver (v0.3.x, fully-optimized engine, flag-free build, transpiled engine committed in-repo) |
-| [googlesqlite](https://github.com/esilver/googlesqlite) | BigQuery/GoogleSQL dialect on the pure-Go engine, with a CI spec-conformance gate and a REPL ([REPRODUCE-PURE-GO.md](https://github.com/esilver/googlesqlite/blob/main/REPRODUCE-PURE-GO.md)) |
+| [googlesql-duckdb](https://github.com/esilver/googlesql-duckdb) | BigQuery/GoogleSQL dialect on the pure-Go engine, with a CI spec-conformance gate and a REPL ([REPRODUCE-PURE-GO.md](https://github.com/esilver/googlesql-duckdb/blob/main/REPRODUCE-PURE-GO.md)) |
 | [bigquery-emulator](https://github.com/esilver/bigquery-emulator/tree/main) | the goccy BigQuery emulator running fully pure-Go, `bq`-CLI acceptance-tested |
 
 ## Repository map
